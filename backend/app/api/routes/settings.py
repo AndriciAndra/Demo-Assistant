@@ -5,6 +5,7 @@ from app.models import (
     User, UserUpdate,
     SchedulerSettings, StorageSettings, SettingsResponse
 )
+from app.models.database import ScrapedData
 from app.services import scheduler_service
 from app.api.deps import get_current_user
 
@@ -48,11 +49,10 @@ async def update_scheduler_settings(
 
     # Update scheduler jobs
     if settings.enabled:
-        # TODO: Add actual job functions
+        # Add the scrape job with the user's schedule
         scheduler_service.add_user_job(
             user_id=current_user.id,
             job_type="scrape",
-            func=lambda **kwargs: None,  # Placeholder
             day_of_week=settings.day_of_week,
             hour=settings.hour,
             minute=settings.minute
@@ -61,6 +61,63 @@ async def update_scheduler_settings(
         scheduler_service.remove_user_jobs(current_user.id)
 
     return {"message": "Scheduler settings updated"}
+
+
+@router.post("/scheduler/run-now")
+async def run_scheduler_now(
+        current_user: User = Depends(get_current_user)
+):
+    """Manually trigger the Jira scraper to run immediately."""
+    if not current_user.jira_api_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Jira not configured. Please connect Jira first."
+        )
+
+    # Run the scraper
+    success = scheduler_service.run_job_now(current_user.id, "scrape")
+
+    if success:
+        return {"message": "Scraper completed successfully. Data has been cached."}
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to run scraper. Check logs for details."
+        )
+
+
+@router.get("/cache")
+async def get_cached_data(
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db)
+):
+    """Get all cached Jira data for the current user."""
+    cached = db.query(ScrapedData).filter(
+        ScrapedData.user_id == current_user.id
+    ).all()
+
+    return [
+        {
+            "id": c.id,
+            "project_key": c.jira_project_key,
+            "scraped_at": c.scraped_at.isoformat() if c.scraped_at else None,
+            "date_range_start": c.date_range_start.isoformat() if c.date_range_start else None,
+            "date_range_end": c.date_range_end.isoformat() if c.date_range_end else None,
+            "issues_count": c.data.get("total_issues", 0) if c.data else 0
+        }
+        for c in cached
+    ]
+
+
+@router.delete("/cache")
+async def clear_cached_data(
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db)
+):
+    """Clear all cached Jira data for the current user."""
+    from app.services.scraper import delete_user_cache
+    delete_user_cache(db, current_user.id)
+    return {"message": "Cache cleared successfully"}
 
 
 @router.put("/storage")
@@ -112,6 +169,12 @@ async def disconnect_jira(
     current_user.jira_base_url = None
     current_user.jira_email = None
     current_user.jira_api_token = None
+
+    # Also remove scheduled jobs and cache
+    scheduler_service.remove_user_jobs(current_user.id)
+
+    from app.services.scraper import delete_user_cache
+    delete_user_cache(db, current_user.id)
 
     db.commit()
 

@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite:///./app.db"
 
+    # MongoDB (for PDF storage)
+    mongodb_url: str = ""
+
     # Jira
     jira_base_url: str = ""
     jira_email: str = ""

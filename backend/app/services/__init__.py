@@ -11,6 +11,12 @@ from app.services.jwt import (
     TokenData,
     TokenResponse
 )
+from app.services.scraper import (
+    scrape_jira_data_for_user,
+    scrape_jira_data_sync,
+    get_cached_data,
+    delete_user_cache
+)
 
 __all__ = [
     "JiraClient",
@@ -25,4 +31,8 @@ __all__ = [
     "verify_token",
     "TokenData",
     "TokenResponse",
+    "scrape_jira_data_for_user",
+    "scrape_jira_data_sync",
+    "get_cached_data",
+    "delete_user_cache",
 ]

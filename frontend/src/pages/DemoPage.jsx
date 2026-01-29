@@ -11,7 +11,7 @@ export default function DemoPage() {
   const [selectedProject, setSelectedProject] = useState('');
   const [selectedSprint, setSelectedSprint] = useState('');
   const [dateRange, setDateRange] = useState({
-    start: new Date().toISOString().split('T')[0],
+    start: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
     end: new Date().toISOString().split('T')[0],
   });
   const [useSprintRange, setUseSprintRange] = useState(true);
@@ -30,8 +30,28 @@ export default function DemoPage() {
   useEffect(() => {
     if (selectedProject) {
       loadSprints();
+      setSelectedSprint(''); // Reset sprint when project changes
+      setMetrics(null);
     }
   }, [selectedProject]);
+
+  // Auto-load metrics when sprint is selected
+  useEffect(() => {
+    if (selectedSprint && useSprintRange) {
+      loadPreview();
+    }
+  }, [selectedSprint]);
+
+  // Auto-load metrics when date range changes (if using date range mode)
+  useEffect(() => {
+    if (!useSprintRange && selectedProject && dateRange.start && dateRange.end) {
+      // Debounce - only load after user stops changing dates
+      const timer = setTimeout(() => {
+        loadPreview();
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [dateRange.start, dateRange.end, useSprintRange]);
 
   const loadProjects = async () => {
     try {
@@ -52,17 +72,31 @@ export default function DemoPage() {
   };
 
   const loadPreview = async () => {
+    if (!selectedProject) return;
+    
+    // Need either sprint or date range
+    if (useSprintRange && !selectedSprint) return;
+    if (!useSprintRange && (!dateRange.start || !dateRange.end)) return;
+
     setIsLoading(true);
     setError(null);
     try {
-      const data = await demoService.preview(
-        selectedProject,
-        dateRange.start,
-        dateRange.end
-      );
+      let data;
+      if (useSprintRange && selectedSprint) {
+        // Use sprint-based preview
+        data = await demoService.previewBySprint(selectedProject, selectedSprint);
+      } else {
+        // Use date range preview
+        data = await demoService.preview(
+          selectedProject,
+          dateRange.start,
+          dateRange.end
+        );
+      }
       setMetrics(data.metrics);
     } catch (err) {
-      setError('Failed to load preview');
+      console.error('Failed to load preview:', err);
+      setError('Failed to load metrics preview');
     } finally {
       setIsLoading(false);
     }
@@ -87,9 +121,21 @@ export default function DemoPage() {
       const data = await demoService.generate(requestData);
       setResult(data);
     } catch (err) {
-      setError('Failed to generate demo');
+      setError(err.response?.data?.detail || 'Failed to generate demo');
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const handleSprintSelect = (sprintId) => {
+    setSelectedSprint(sprintId);
+    // Find sprint and update date range for display
+    const sprint = sprints.find(s => String(s.id) === String(sprintId));
+    if (sprint && sprint.start_date && sprint.end_date) {
+      setDateRange({
+        start: sprint.start_date.split('T')[0],
+        end: sprint.end_date.split('T')[0],
+      });
     }
   };
 
@@ -144,23 +190,30 @@ export default function DemoPage() {
             onChange={setSelectedProject}
             placeholder="Select project"
           />
-          <Dropdown
-            label="Sprint"
-            value={selectedSprint}
-            options={sprints.map((s) => ({
-              value: String(s.id),
-              label: `${s.name} (${s.state})`,
-            }))}
-            onChange={setSelectedSprint}
-            placeholder="Select sprint"
-          />
+          {useSprintRange && (
+            <Dropdown
+              label="Sprint"
+              value={selectedSprint}
+              options={sprints.map((s) => ({
+                value: String(s.id),
+                label: `${s.name} (${s.state})`,
+              }))}
+              onChange={handleSprintSelect}
+              placeholder="Select sprint"
+            />
+          )}
         </div>
 
         <div className="mt-4">
           <div className="flex items-center gap-4 mb-2">
-            <label className="text-sm text-gray-500">Or select date range</label>
+            <label className="text-sm text-gray-500">
+              {useSprintRange ? 'Using sprint dates' : 'Using custom date range'}
+            </label>
             <button
-              onClick={() => setUseSprintRange(!useSprintRange)}
+              onClick={() => {
+                setUseSprintRange(!useSprintRange);
+                setMetrics(null);
+              }}
               className="text-sm text-indigo-600 hover:text-indigo-700"
             >
               {useSprintRange ? 'Use date range instead' : 'Use sprint instead'}
@@ -194,7 +247,7 @@ export default function DemoPage() {
             size="sm"
             onClick={loadPreview}
             loading={isLoading}
-            disabled={!selectedProject}
+            disabled={!selectedProject || (useSprintRange && !selectedSprint)}
           >
             <RefreshCw size={16} />
             Refresh
@@ -204,26 +257,26 @@ export default function DemoPage() {
           <MetricCard
             icon={Target}
             label="Total Issues"
-            value={metrics?.total_issues || '-'}
+            value={metrics?.total_issues ?? '-'}
             color="bg-blue-500"
           />
           <MetricCard
             icon={Check}
             label="Completed"
-            value={metrics?.completed_issues || '-'}
+            value={metrics?.completed_issues ?? '-'}
             subValue={metrics ? `${metrics.completion_rate}%` : undefined}
             color="bg-green-500"
           />
           <MetricCard
             icon={TrendingUp}
             label="Story Points"
-            value={metrics?.total_story_points || '-'}
+            value={metrics?.total_story_points ?? '-'}
             color="bg-purple-500"
           />
           <MetricCard
             icon={Clock}
             label="Completed Points"
-            value={metrics?.completed_story_points || '-'}
+            value={metrics?.completed_story_points ?? '-'}
             color="bg-orange-500"
           />
         </div>
@@ -241,7 +294,7 @@ export default function DemoPage() {
           <Button
             onClick={handleGenerate}
             loading={isGenerating}
-            disabled={!selectedProject || (!selectedSprint && useSprintRange)}
+            disabled={!selectedProject || (useSprintRange && !selectedSprint) || (!useSprintRange && (!dateRange.start || !dateRange.end))}
           >
             <Sparkles size={18} />
             Generate Demo

@@ -7,13 +7,24 @@ const demoService = {
     return response.data;
   },
 
-  // Preview demo content
+  // Preview demo content by date range
   async preview(projectKey, startDate, endDate) {
     const response = await api.get('/demo/preview', {
       params: {
         jira_project_key: projectKey,
         start_date: startDate,
         end_date: endDate,
+      },
+    });
+    return response.data;
+  },
+
+  // Preview demo content by sprint
+  async previewBySprint(projectKey, sprintId) {
+    const response = await api.get('/demo/preview/sprint', {
+      params: {
+        jira_project_key: projectKey,
+        sprint_id: sprintId,
       },
     });
     return response.data;
