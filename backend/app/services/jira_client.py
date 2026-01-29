@@ -31,6 +31,40 @@ class JiraClient:
             response.raise_for_status()
             return response.json()
 
+    async def _search_jql(self, jql: str, fields: list, max_results: int = 100) -> dict:
+        """Search issues using the new JQL endpoint (replaces deprecated /search)."""
+        url = f"{self.base_url}/rest/api/3/search/jql"
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url=url,
+                auth=self.auth,
+                headers=self.headers,
+                params={
+                    "jql": jql,
+                    "maxResults": max_results,
+                    "fields": ",".join(fields) if isinstance(fields, list) else fields
+                },
+                timeout=30.0
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def _post_request(self, endpoint: str, json_data: dict, api_version: str = "3") -> dict:
+        """Make authenticated POST request to Jira API."""
+        url = f"{self.base_url}/rest/api/{api_version}/{endpoint}"
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url=url,
+                auth=self.auth,
+                headers=self.headers,
+                json=json_data,
+                timeout=30.0
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def _agile_request(self, method: str, endpoint: str, **kwargs) -> dict:
         """Make request to Jira Agile API."""
         url = f"{self.base_url}/rest/agile/1.0/{endpoint}"
@@ -129,14 +163,12 @@ class JiraClient:
 
         jql += " ORDER BY updated DESC"
 
-        data = await self._request(
-            "GET",
-            "search",
-            params={
-                "jql": jql,
-                "maxResults": 100,
-                "fields": "summary,status,issuetype,assignee,priority,labels,created,resolutiondate,customfield_10016"
-            }
+        # Use new /search/jql endpoint (old /search was deprecated)
+        data = await self._search_jql(
+            jql=jql,
+            fields=["summary", "status", "issuetype", "assignee", "priority", "labels", "created", "resolutiondate",
+                    "customfield_10016"],
+            max_results=100
         )
         return self._parse_issues(data.get("issues", []))
 
@@ -251,6 +283,7 @@ class JiraClient:
 
     async def get_project_metrics_by_sprint(
             self,
+            project_key: str,
             sprint_id: int
     ) -> dict:
         """Get comprehensive metrics for a specific sprint."""

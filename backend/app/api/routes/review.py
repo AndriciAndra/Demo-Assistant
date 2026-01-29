@@ -14,6 +14,18 @@ from app.api.routes.jira import get_jira_client
 router = APIRouter(prefix="/self-review", tags=["self-review"])
 
 
+def serialize_for_json(obj):
+    """Recursively convert datetime objects to ISO strings for JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: serialize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [serialize_for_json(item) for item in obj]
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    else:
+        return obj
+
+
 @router.post("/recommend", response_model=SelfReviewRecommendResponse)
 async def recommend_template(
         request: SelfReviewRecommendRequest,
@@ -97,6 +109,9 @@ async def generate_self_review(
         # TODO: Implement Drive sync
         pass
 
+    # Serialize metrics for JSON storage (convert datetime objects to strings)
+    serialized_metrics = serialize_for_json(metrics)
+
     # Save to database
     generated_file = GeneratedFile(
         user_id=current_user.id,
@@ -107,7 +122,7 @@ async def generate_self_review(
         date_range_start=request.date_range.start,
         date_range_end=request.date_range.end,
         jira_project_key=request.jira_project_key,
-        metrics=metrics
+        metrics=serialized_metrics
     )
     db.add(generated_file)
     db.commit()
@@ -117,7 +132,7 @@ async def generate_self_review(
         id=generated_file.id,
         firebase_url=firebase_url,
         drive_url=drive_url,
-        metrics=metrics
+        metrics=serialized_metrics
     )
 
 

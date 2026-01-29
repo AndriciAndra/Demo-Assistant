@@ -60,7 +60,7 @@ async def generate_demo(
     if request.sprint_id:
         # Use sprint API directly - more reliable
         print(f"DEBUG: Using sprint_id = {request.sprint_id}")
-        metrics = await jira_client.get_project_metrics_by_sprint(request.sprint_id)
+        metrics = await jira_client.get_project_metrics_by_sprint(request.jira_project_key, request.sprint_id)
 
         # Get sprint info for date range
         board_id = await jira_client.get_board_id(request.jira_project_key)
@@ -160,7 +160,7 @@ async def preview_demo(
         end_date: datetime,
         current_user: User = Depends(get_current_user)
 ):
-    """Preview demo content without generating slides."""
+    """Preview demo content without generating slides (by date range)."""
     jira_client = await get_jira_client(current_user)
 
     # Get metrics
@@ -170,13 +170,30 @@ async def preview_demo(
         end_date
     )
 
-    # Generate content preview
-    gemini = GeminiService()
-    content = await gemini.generate_demo_content(metrics, jira_project_key)
+    return {
+        "metrics": metrics,
+        "content": None  # Don't generate AI content for preview, just metrics
+    }
+
+
+@router.get("/preview/sprint")
+async def preview_demo_by_sprint(
+        jira_project_key: str,
+        sprint_id: int,
+        current_user: User = Depends(get_current_user)
+):
+    """Preview demo content without generating slides (by sprint)."""
+    jira_client = await get_jira_client(current_user)
+
+    # Get metrics by sprint
+    metrics = await jira_client.get_project_metrics_by_sprint(
+        jira_project_key,
+        sprint_id
+    )
 
     return {
         "metrics": metrics,
-        "content": content
+        "content": None  # Don't generate AI content for preview, just metrics
     }
 
 
