@@ -1,7 +1,6 @@
 from app.services.jira_client import JiraClient
 from app.services.gemini import GeminiService
 from app.services.slides import SlidesService
-from app.services.firebase import FirebaseService
 from app.services.scheduler import SchedulerService, scheduler_service
 from app.services.pdf import PDFService
 from app.services.google_auth import GoogleAuthService
@@ -17,12 +16,12 @@ from app.services.scraper import (
     get_cached_data,
     delete_user_cache
 )
+from app.services.mongo_storage import MongoStorageService, get_mongo_storage
 
 __all__ = [
     "JiraClient",
     "GeminiService",
     "SlidesService",
-    "FirebaseService",
     "SchedulerService",
     "scheduler_service",
     "PDFService",
@@ -35,4 +34,6 @@ __all__ = [
     "scrape_jira_data_sync",
     "get_cached_data",
     "delete_user_cache",
+    "MongoStorageService",
+    "get_mongo_storage",
 ]

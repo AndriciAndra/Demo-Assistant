@@ -13,6 +13,24 @@ const settingsService = {
     return response.data;
   },
 
+  // Run scheduler immediately
+  async runSchedulerNow() {
+    const response = await api.post('/settings/scheduler/run-now');
+    return response.data;
+  },
+
+  // Get cached data
+  async getCache() {
+    const response = await api.get('/settings/cache');
+    return response.data;
+  },
+
+  // Clear cached data
+  async clearCache() {
+    const response = await api.delete('/settings/cache');
+    return response.data;
+  },
+
   // Update storage settings
   async updateStorage(settings) {
     const response = await api.put('/settings/storage', settings);

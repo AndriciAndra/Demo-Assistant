@@ -1,4 +1,4 @@
-from app.models.database import User, GeneratedFile, Template, ScrapedData
+from app.models.database import User, GeneratedFile, Template
 from app.models.schemas import (
     UserCreate, UserUpdate, UserResponse,
     JiraCredentials, JiraProject, JiraSprint, JiraIssue,
@@ -13,7 +13,7 @@ from app.models.schemas import (
 
 __all__ = [
     # Database models
-    "User", "GeneratedFile", "Template", "ScrapedData",
+    "User", "GeneratedFile", "Template",
     # Schemas
     "UserCreate", "UserUpdate", "UserResponse",
     "JiraCredentials", "JiraProject", "JiraSprint", "JiraIssue",

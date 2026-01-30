@@ -20,7 +20,8 @@ class UserUpdate(BaseModel):
     jira_email: Optional[str] = None
     jira_api_token: Optional[str] = None
     scheduler_enabled: Optional[bool] = None
-    scheduler_day_of_week: Optional[str] = None
+    scheduler_frequency: Optional[str] = None  # 'daily', 'weekly', 'custom'
+    scheduler_days: Optional[str] = None  # comma-separated: "mon,wed,fri"
     scheduler_hour: Optional[int] = None
     scheduler_minute: Optional[int] = None
     sync_to_drive: Optional[bool] = None
@@ -30,12 +31,13 @@ class UserUpdate(BaseModel):
 class UserResponse(UserBase):
     id: int
     scheduler_enabled: bool
-    scheduler_day_of_week: str
+    scheduler_frequency: str
+    scheduler_days: str
     scheduler_hour: int
     scheduler_minute: int
     sync_to_drive: bool
     created_at: datetime
-    
+
     class Config:
         from_attributes = True
 
@@ -96,7 +98,7 @@ class DemoGenerateRequest(BaseModel):
 class DemoGenerateResponse(BaseModel):
     id: int
     google_slides_url: str
-    firebase_url: Optional[str] = None
+    mongo_file_id: Optional[str] = None
     drive_url: Optional[str] = None
     metrics: dict
 
@@ -122,7 +124,7 @@ class SelfReviewRecommendResponse(BaseModel):
 
 class SelfReviewGenerateResponse(BaseModel):
     id: int
-    firebase_url: str
+    download_url: str  # /api/files/{mongo_file_id}
     drive_url: Optional[str] = None
     metrics: dict
 
@@ -144,7 +146,7 @@ class TemplateResponse(TemplateBase):
     user_id: Optional[int] = None
     is_default: bool
     created_at: datetime
-    
+
     class Config:
         from_attributes = True
 
@@ -155,7 +157,8 @@ class GeneratedFileResponse(BaseModel):
     id: int
     file_type: str
     filename: str
-    firebase_url: Optional[str] = None
+    mongo_file_id: Optional[str] = None
+    download_url: Optional[str] = None  # Computed from mongo_file_id
     drive_url: Optional[str] = None
     google_slides_id: Optional[str] = None
     date_range_start: Optional[datetime] = None
@@ -163,7 +166,7 @@ class GeneratedFileResponse(BaseModel):
     jira_project_key: Optional[str] = None
     metrics: Optional[dict] = None
     created_at: datetime
-    
+
     class Config:
         from_attributes = True
 
@@ -172,7 +175,8 @@ class GeneratedFileResponse(BaseModel):
 
 class SchedulerSettings(BaseModel):
     enabled: bool
-    day_of_week: str
+    frequency: str  # 'daily', 'weekly', 'custom'
+    days: list[str]  # ['mon', 'wed', 'fri'] or ['thu'] etc.
     hour: int
     minute: int
 

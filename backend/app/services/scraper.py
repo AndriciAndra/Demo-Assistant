@@ -1,13 +1,16 @@
 """
 Scraper service for scheduled Jira data caching.
 Runs on schedule to fetch and cache Jira data for faster demo/review generation.
+Now uses MongoDB Atlas for persistent cache storage.
 """
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
-from app.models.database import User, ScrapedData
+from app.models.database import User
 from app.services.jira_client import JiraClient
+from app.services.mongo_storage import get_mongo_storage
 import logging
+import asyncio
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -28,7 +31,7 @@ def serialize_for_json(obj):
 
 async def scrape_jira_data_for_user(user_id: int):
     """
-    Scrape Jira data for a specific user and cache it.
+    Scrape Jira data for a specific user and cache it in MongoDB.
     Called by the scheduler.
     """
     db: Session = SessionLocal()
@@ -62,6 +65,9 @@ async def scrape_jira_data_for_user(user_id: int):
         projects = await jira_client.get_projects()
         logger.info(f"Found {len(projects)} projects for user {user_id}")
 
+        # Get MongoDB storage
+        mongo_storage = get_mongo_storage()
+
         # For each project, scrape recent data (last 30 days)
         end_date = datetime.now()
         start_date = end_date - timedelta(days=30)
@@ -80,32 +86,16 @@ async def scrape_jira_data_for_user(user_id: int):
                 # Serialize metrics for JSON storage
                 serialized_metrics = serialize_for_json(metrics)
 
-                # Check if we already have cached data for this project
-                existing = db.query(ScrapedData).filter(
-                    ScrapedData.user_id == user_id,
-                    ScrapedData.jira_project_key == project.key
-                ).first()
+                # Save to MongoDB cache
+                await mongo_storage.save_cached_data(
+                    user_id=user_id,
+                    project_key=project.key,
+                    data=serialized_metrics,
+                    date_range_start=start_date,
+                    date_range_end=end_date
+                )
 
-                if existing:
-                    # Update existing cache
-                    existing.data = serialized_metrics
-                    existing.scraped_at = datetime.now()
-                    existing.date_range_start = start_date
-                    existing.date_range_end = end_date
-                    logger.info(f"Updated cache for project {project.key}")
-                else:
-                    # Create new cache entry
-                    scraped_data = ScrapedData(
-                        user_id=user_id,
-                        jira_project_key=project.key,
-                        data=serialized_metrics,
-                        date_range_start=start_date,
-                        date_range_end=end_date
-                    )
-                    db.add(scraped_data)
-                    logger.info(f"Created cache for project {project.key}")
-
-                db.commit()
+                logger.info(f"Cached data for project {project.key}")
 
             except Exception as e:
                 logger.error(f"Failed to scrape project {project.key}: {e}")
@@ -115,7 +105,6 @@ async def scrape_jira_data_for_user(user_id: int):
 
     except Exception as e:
         logger.error(f"Error during Jira scrape for user {user_id}: {e}")
-        db.rollback()
     finally:
         db.close()
 
@@ -125,8 +114,6 @@ def scrape_jira_data_sync(user_id: int):
     Synchronous wrapper for the async scrape function.
     Used by APScheduler which doesn't support async directly.
     """
-    import asyncio
-
     # Create new event loop for the scheduled job
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -137,12 +124,11 @@ def scrape_jira_data_sync(user_id: int):
         loop.close()
 
 
-def get_cached_data(db: Session, user_id: int, project_key: str, max_age_hours: int = 24):
+async def get_cached_data(user_id: int, project_key: str, max_age_hours: int = 24):
     """
-    Get cached Jira data if it exists and is not too old.
+    Get cached Jira data from MongoDB if it exists and is not too old.
 
     Args:
-        db: Database session
         user_id: User ID
         project_key: Jira project key
         max_age_hours: Maximum age of cache in hours (default 24)
@@ -150,26 +136,12 @@ def get_cached_data(db: Session, user_id: int, project_key: str, max_age_hours: 
     Returns:
         Cached data dict or None if not found/expired
     """
-    cached = db.query(ScrapedData).filter(
-        ScrapedData.user_id == user_id,
-        ScrapedData.jira_project_key == project_key
-    ).first()
-
-    if not cached:
-        return None
-
-    # Check if cache is too old
-    age = datetime.now() - cached.scraped_at
-    if age > timedelta(hours=max_age_hours):
-        logger.info(f"Cache for {project_key} is {age.total_seconds() / 3600:.1f} hours old, considered stale")
-        return None
-
-    logger.info(f"Using cached data for {project_key} (age: {age.total_seconds() / 60:.0f} minutes)")
-    return cached.data
+    mongo_storage = get_mongo_storage()
+    return await mongo_storage.get_cached_data(user_id, project_key, max_age_hours)
 
 
-def delete_user_cache(db: Session, user_id: int):
-    """Delete all cached data for a user."""
-    db.query(ScrapedData).filter(ScrapedData.user_id == user_id).delete()
-    db.commit()
+async def delete_user_cache(user_id: int):
+    """Delete all cached data for a user from MongoDB."""
+    mongo_storage = get_mongo_storage()
+    await mongo_storage.delete_cached_data(user_id)
     logger.info(f"Deleted all cached data for user {user_id}")

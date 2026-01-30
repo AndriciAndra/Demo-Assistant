@@ -5,11 +5,39 @@ from app.models import (
     User, UserUpdate,
     SchedulerSettings, StorageSettings, SettingsResponse
 )
-from app.models.database import ScrapedData
 from app.services import scheduler_service
+from app.services.mongo_storage import get_mongo_storage
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+
+def calculate_cache_expiry_hours(frequency: str, days: list[str]) -> int:
+    """
+    Calculate cache expiry based on scheduler frequency.
+
+    Cache should be valid until next scheduled run + buffer.
+    """
+    if frequency == "daily":
+        # Runs every day → cache valid 36 hours (1.5 days buffer)
+        return 36
+    elif frequency == "weekly":
+        # Runs once per week → cache valid 192 hours (8 days)
+        return 192
+    elif frequency == "custom":
+        # Based on number of days selected
+        num_days = len(days) if days else 1
+        if num_days >= 5:  # Almost daily
+            return 36
+        elif num_days >= 3:  # 3-4 times per week
+            return 72  # 3 days
+        elif num_days >= 2:  # Twice per week
+            return 96  # 4 days
+        else:  # Once per week
+            return 192  # 8 days
+    else:
+        # Default fallback
+        return 168  # 7 days
 
 
 @router.get("", response_model=SettingsResponse)
@@ -17,10 +45,14 @@ async def get_settings(
         current_user: User = Depends(get_current_user)
 ):
     """Get user settings."""
+    # Parse days from comma-separated string to list
+    days_list = current_user.scheduler_days.split(",") if current_user.scheduler_days else ["thu"]
+
     return SettingsResponse(
         scheduler=SchedulerSettings(
             enabled=current_user.scheduler_enabled,
-            day_of_week=current_user.scheduler_day_of_week,
+            frequency=current_user.scheduler_frequency or "weekly",
+            days=days_list,
             hour=current_user.scheduler_hour,
             minute=current_user.scheduler_minute
         ),
@@ -40,8 +72,12 @@ async def update_scheduler_settings(
         db: Session = Depends(get_db)
 ):
     """Update scheduler settings."""
+    # Convert days list to comma-separated string
+    days_str = ",".join(settings.days) if settings.days else "thu"
+
     current_user.scheduler_enabled = settings.enabled
-    current_user.scheduler_day_of_week = settings.day_of_week
+    current_user.scheduler_frequency = settings.frequency
+    current_user.scheduler_days = days_str
     current_user.scheduler_hour = settings.hour
     current_user.scheduler_minute = settings.minute
 
@@ -49,18 +85,38 @@ async def update_scheduler_settings(
 
     # Update scheduler jobs
     if settings.enabled:
-        # Add the scrape job with the user's schedule
+        # Remove old jobs first
+        scheduler_service.remove_user_jobs(current_user.id)
+
+        # Determine which days to schedule
+        if settings.frequency == "daily":
+            # Schedule for all days
+            schedule_days = "mon,tue,wed,thu,fri,sat,sun"
+        elif settings.frequency == "weekly":
+            # Use first day from the list
+            schedule_days = settings.days[0] if settings.days else "thu"
+        else:  # custom
+            schedule_days = days_str
+
+        # Add job(s) for each day
         scheduler_service.add_user_job(
             user_id=current_user.id,
             job_type="scrape",
-            day_of_week=settings.day_of_week,
+            day_of_week=schedule_days,
             hour=settings.hour,
             minute=settings.minute
         )
     else:
         scheduler_service.remove_user_jobs(current_user.id)
 
-    return {"message": "Scheduler settings updated"}
+    # Calculate and return cache expiry info
+    cache_hours = calculate_cache_expiry_hours(settings.frequency, settings.days)
+
+    return {
+        "message": "Scheduler settings updated",
+        "cache_expiry_hours": cache_hours,
+        "next_runs": scheduler_service.get_user_jobs(current_user.id)
+    }
 
 
 @router.post("/scheduler/run-now")
@@ -74,49 +130,36 @@ async def run_scheduler_now(
             detail="Jira not configured. Please connect Jira first."
         )
 
-    # Run the scraper
-    success = scheduler_service.run_job_now(current_user.id, "scrape")
+    # Run the scraper directly (async)
+    from app.services.scraper import scrape_jira_data_for_user
 
-    if success:
-        return {"message": "Scraper completed successfully. Data has been cached."}
-    else:
+    try:
+        await scrape_jira_data_for_user(current_user.id)
+        return {"message": "Scraper completed successfully. Data has been cached in MongoDB."}
+    except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail="Failed to run scraper. Check logs for details."
+            detail=f"Failed to run scraper: {str(e)}"
         )
 
 
 @router.get("/cache")
 async def get_cached_data(
-        current_user: User = Depends(get_current_user),
-        db: Session = Depends(get_db)
+        current_user: User = Depends(get_current_user)
 ):
-    """Get all cached Jira data for the current user."""
-    cached = db.query(ScrapedData).filter(
-        ScrapedData.user_id == current_user.id
-    ).all()
-
-    return [
-        {
-            "id": c.id,
-            "project_key": c.jira_project_key,
-            "scraped_at": c.scraped_at.isoformat() if c.scraped_at else None,
-            "date_range_start": c.date_range_start.isoformat() if c.date_range_start else None,
-            "date_range_end": c.date_range_end.isoformat() if c.date_range_end else None,
-            "issues_count": c.data.get("total_issues", 0) if c.data else 0
-        }
-        for c in cached
-    ]
+    """Get all cached Jira data for the current user from MongoDB."""
+    mongo_storage = get_mongo_storage()
+    cached = await mongo_storage.get_all_cached_data(current_user.id)
+    return cached
 
 
 @router.delete("/cache")
 async def clear_cached_data(
-        current_user: User = Depends(get_current_user),
-        db: Session = Depends(get_db)
+        current_user: User = Depends(get_current_user)
 ):
-    """Clear all cached Jira data for the current user."""
-    from app.services.scraper import delete_user_cache
-    delete_user_cache(db, current_user.id)
+    """Clear all cached Jira data for the current user from MongoDB."""
+    mongo_storage = get_mongo_storage()
+    await mongo_storage.delete_cached_data(current_user.id)
     return {"message": "Cache cleared successfully"}
 
 
@@ -170,11 +213,12 @@ async def disconnect_jira(
     current_user.jira_email = None
     current_user.jira_api_token = None
 
-    # Also remove scheduled jobs and cache
+    # Remove scheduled jobs
     scheduler_service.remove_user_jobs(current_user.id)
 
-    from app.services.scraper import delete_user_cache
-    delete_user_cache(db, current_user.id)
+    # Clear MongoDB cache
+    mongo_storage = get_mongo_storage()
+    await mongo_storage.delete_cached_data(current_user.id)
 
     db.commit()
 

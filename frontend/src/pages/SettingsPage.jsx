@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useOutletContext } from 'react-router-dom';
-import { FolderOpen } from 'lucide-react';
+import { FolderOpen, Info } from 'lucide-react';
 import { Card, Button, Dropdown, Toggle, Alert } from '../components/common';
 import { jiraService, settingsService } from '../services';
 
@@ -13,7 +13,8 @@ export default function SettingsPage() {
   });
   const [schedulerSettings, setSchedulerSettings] = useState({
     enabled: false,
-    day_of_week: 'thu',
+    frequency: 'weekly',
+    days: ['thu'],
     hour: 18,
     minute: 0,
   });
@@ -24,6 +25,7 @@ export default function SettingsPage() {
   const [isConnectingJira, setIsConnectingJira] = useState(false);
   const [isSavingScheduler, setIsSavingScheduler] = useState(false);
   const [isSavingStorage, setIsSavingStorage] = useState(false);
+  const [isRunningNow, setIsRunningNow] = useState(false);
   const [message, setMessage] = useState(null);
 
   useEffect(() => {
@@ -66,13 +68,32 @@ export default function SettingsPage() {
     setIsSavingScheduler(true);
     setMessage(null);
     try {
-      await settingsService.updateScheduler(schedulerSettings);
-      setMessage({ type: 'success', text: 'Scheduler settings saved!' });
+      const result = await settingsService.updateScheduler(schedulerSettings);
+      setMessage({ 
+        type: 'success', 
+        text: `Scheduler settings saved! Cache expires in ${result.cache_expiry_hours} hours.` 
+      });
       refreshSettings();
     } catch (err) {
       setMessage({ type: 'error', text: 'Failed to save scheduler settings' });
     } finally {
       setIsSavingScheduler(false);
+    }
+  };
+
+  const handleRunNow = async () => {
+    setIsRunningNow(true);
+    setMessage(null);
+    try {
+      await settingsService.runSchedulerNow();
+      setMessage({ type: 'success', text: 'Scraper completed! Data cached in MongoDB.' });
+    } catch (err) {
+      setMessage({ 
+        type: 'error', 
+        text: err.response?.data?.detail || 'Failed to run scraper' 
+      });
+    } finally {
+      setIsRunningNow(false);
     }
   };
 
@@ -90,7 +111,32 @@ export default function SettingsPage() {
     }
   };
 
-  const dayOptions = [
+  const toggleDay = (day) => {
+    const currentDays = schedulerSettings.days || [];
+    if (currentDays.includes(day)) {
+      // Remove day (but keep at least one)
+      if (currentDays.length > 1) {
+        setSchedulerSettings({
+          ...schedulerSettings,
+          days: currentDays.filter(d => d !== day)
+        });
+      }
+    } else {
+      // Add day
+      setSchedulerSettings({
+        ...schedulerSettings,
+        days: [...currentDays, day]
+      });
+    }
+  };
+
+  const frequencyOptions = [
+    { value: 'daily', label: 'Daily' },
+    { value: 'weekly', label: 'Weekly' },
+    { value: 'custom', label: 'Custom (select days)' },
+  ];
+
+  const allDays = [
     { value: 'mon', label: 'Monday' },
     { value: 'tue', label: 'Tuesday' },
     { value: 'wed', label: 'Wednesday' },
@@ -101,9 +147,47 @@ export default function SettingsPage() {
   ];
 
   const hourOptions = Array.from({ length: 24 }, (_, i) => ({
-    value: i,
-    label: `${i.toString().padStart(2, '0')}:00`,
+    value: i.toString(),
+    label: i.toString().padStart(2, '0'),
   }));
+
+  const minuteOptions = Array.from({ length: 60 }, (_, i) => ({
+    value: i.toString(),
+    label: i.toString().padStart(2, '0'),
+  }));
+
+  // Calculate cache expiry for display
+  const getCacheExpiryText = () => {
+    const { frequency, days } = schedulerSettings;
+    if (frequency === 'daily') return '~36 hours';
+    if (frequency === 'weekly') return '~8 days';
+    if (frequency === 'custom') {
+      const numDays = days?.length || 1;
+      if (numDays >= 5) return '~36 hours';
+      if (numDays >= 3) return '~3 days';
+      if (numDays >= 2) return '~4 days';
+      return '~8 days';
+    }
+    return '~7 days';
+  };
+
+  // Format schedule description
+  const getScheduleDescription = () => {
+    const { frequency, days } = schedulerSettings;
+    const hour = schedulerSettings.hour ?? 0;
+    const minute = schedulerSettings.minute ?? 0;
+    const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+    
+    if (frequency === 'daily') {
+      return `Every day at ${timeStr}`;
+    } else if (frequency === 'weekly') {
+      const dayLabel = allDays.find(d => d.value === days?.[0])?.label || 'Thu';
+      return `Every ${dayLabel} at ${timeStr}`;
+    } else {
+      const dayLabels = days?.map(d => allDays.find(day => day.value === d)?.label).join(', ') || 'Thu';
+      return `Every ${dayLabels} at ${timeStr}`;
+    }
+  };
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -262,13 +346,13 @@ export default function SettingsPage() {
         <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="font-semibold text-gray-700">Automatic Scheduling</h3>
-            <p className="text-sm text-gray-400">Schedule automatic data scraping</p>
+            <p className="text-sm text-gray-400">Schedule automatic Jira data caching</p>
           </div>
         </div>
 
         <Toggle
           label="Enable Scheduler"
-          description="Automatically scrape Jira data on schedule"
+          description="Automatically cache Jira data on schedule"
           checked={schedulerSettings.enabled}
           onChange={(checked) =>
             setSchedulerSettings({ ...schedulerSettings, enabled: checked })
@@ -276,27 +360,93 @@ export default function SettingsPage() {
         />
 
         {schedulerSettings.enabled && (
-          <div className="grid grid-cols-2 gap-4 mt-4">
+          <div className="mt-4 space-y-4">
+            {/* Frequency */}
             <Dropdown
-              label="Day"
-              value={schedulerSettings.day_of_week}
-              options={dayOptions}
+              label="Frequency"
+              value={schedulerSettings.frequency}
+              options={frequencyOptions}
               onChange={(val) =>
-                setSchedulerSettings({ ...schedulerSettings, day_of_week: val })
+                setSchedulerSettings({ 
+                  ...schedulerSettings, 
+                  frequency: val,
+                  days: val === 'daily' ? allDays.map(d => d.value) : 
+                        val === 'weekly' ? [schedulerSettings.days?.[0] || 'thu'] :
+                        schedulerSettings.days
+                })
               }
             />
-            <Dropdown
-              label="Time"
-              value={schedulerSettings.hour}
-              options={hourOptions}
-              onChange={(val) =>
-                setSchedulerSettings({ ...schedulerSettings, hour: val })
-              }
-            />
+
+            {/* Day selection for weekly */}
+            {schedulerSettings.frequency === 'weekly' && (
+              <Dropdown
+                label="Day"
+                value={schedulerSettings.days?.[0] || 'thu'}
+                options={allDays.map(d => ({ value: d.value, label: d.label }))}
+                onChange={(val) =>
+                  setSchedulerSettings({ ...schedulerSettings, days: [val] })
+                }
+              />
+            )}
+
+            {/* Day selection for custom */}
+            {schedulerSettings.frequency === 'custom' && (
+              <div>
+                <label className="block text-sm text-gray-500 mb-2">Select Days</label>
+                <div className="flex gap-2">
+                  {allDays.map((day) => (
+                    <button
+                      key={day.value}
+                      onClick={() => toggleDay(day.value)}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                        schedulerSettings.days?.includes(day.value)
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      }`}
+                    >
+                      {day.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Time selection */}
+            <div className="grid grid-cols-2 gap-4">
+              <Dropdown
+                label="Hour"
+                value={String(schedulerSettings.hour ?? 0)}
+                options={hourOptions}
+                onChange={(val) =>
+                  setSchedulerSettings({ ...schedulerSettings, hour: Number(val) })
+                }
+              />
+              <Dropdown
+                label="Minute"
+                value={String(schedulerSettings.minute ?? 0)}
+                options={minuteOptions}
+                onChange={(val) =>
+                  setSchedulerSettings({ ...schedulerSettings, minute: Number(val) })
+                }
+              />
+            </div>
+
+            {/* Schedule summary */}
+            <div className="p-3 bg-indigo-50 rounded-lg">
+              <div className="flex items-start gap-2">
+                <Info size={16} className="text-indigo-600 mt-0.5" />
+                <div className="text-sm">
+                  <p className="text-indigo-700 font-medium">{getScheduleDescription()}</p>
+                  <p className="text-indigo-600 mt-1">
+                    Cache expires after {getCacheExpiryText()}
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
-        <div className="mt-4">
+        <div className="mt-4 flex gap-3">
           <Button
             variant="outline"
             onClick={handleSaveScheduler}
@@ -304,6 +454,15 @@ export default function SettingsPage() {
           >
             Save Scheduler Settings
           </Button>
+          {settings.jira_connected && (
+            <Button
+              variant="secondary"
+              onClick={handleRunNow}
+              loading={isRunningNow}
+            >
+              Run Now
+            </Button>
+          )}
         </div>
       </Card>
 

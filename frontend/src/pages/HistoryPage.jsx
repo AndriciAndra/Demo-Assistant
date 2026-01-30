@@ -149,9 +149,9 @@ export default function HistoryPage() {
                       <Eye size={18} className="text-gray-400" />
                     </a>
                   )}
-                  {item.firebase_url && (
+                  {item.download_url && (
                     <a
-                      href={item.firebase_url}
+                      href={item.download_url}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
