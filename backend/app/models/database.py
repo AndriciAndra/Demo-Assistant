@@ -51,6 +51,7 @@ class GeneratedFile(Base):
     # File info
     filename = Column(String(500), nullable=False)
     mongo_file_id = Column(String(100), nullable=True)  # MongoDB GridFS ObjectId
+    drive_file_id = Column(String(100), nullable=True)  # Google Drive file ID
     drive_url = Column(Text, nullable=True)
     google_slides_id = Column(String(255), nullable=True)
 

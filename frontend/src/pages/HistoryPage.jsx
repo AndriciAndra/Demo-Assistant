@@ -64,6 +64,11 @@ export default function HistoryPage() {
     { key: 'reviews', label: 'Self Reviews' },
   ];
 
+  // Get download URL - handles both old firebase_url and new download_url
+  const getDownloadUrl = (item) => {
+    return item.download_url || item.firebase_url;
+  };
+
   return (
     <div className="max-w-4xl mx-auto">
       <div className="mb-8">
@@ -149,9 +154,9 @@ export default function HistoryPage() {
                       <Eye size={18} className="text-gray-400" />
                     </a>
                   )}
-                  {item.download_url && (
+                  {getDownloadUrl(item) && (
                     <a
-                      href={item.download_url}
+                      href={getDownloadUrl(item)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="p-2 hover:bg-gray-100 rounded-lg transition-colors"

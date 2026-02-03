@@ -1,6 +1,7 @@
 from app.services.jira_client import JiraClient
 from app.services.gemini import GeminiService
 from app.services.slides import SlidesService
+from app.services.drive import DriveService
 from app.services.scheduler import SchedulerService, scheduler_service
 from app.services.pdf import PDFService
 from app.services.google_auth import GoogleAuthService
@@ -22,6 +23,7 @@ __all__ = [
     "JiraClient",
     "GeminiService",
     "SlidesService",
+    "DriveService",
     "SchedulerService",
     "scheduler_service",
     "PDFService",

@@ -196,11 +196,53 @@ async def generate_self_review(
         }
     )
 
-    # Optionally sync to Google Drive
+    # Sync to Google Drive if enabled
     drive_url = None
-    if current_user.sync_to_drive and current_user.drive_folder_id:
-        # TODO: Implement Drive sync
-        pass
+    drive_file_id = None
+    if current_user.sync_to_drive:
+        try:
+            from app.services.drive import DriveService
+            from app.services.google_auth import GoogleAuthService
+
+            # Get Google credentials
+            google_auth = GoogleAuthService()
+            credentials = google_auth.get_credentials(
+                access_token=current_user.google_access_token,
+                refresh_token=current_user.google_refresh_token,
+                token_expiry=current_user.google_token_expiry
+            )
+
+            # Refresh if needed
+            if google_auth.is_token_expired(current_user.google_token_expiry):
+                credentials = await google_auth.refresh_credentials(credentials)
+                # Update tokens in database
+                current_user.google_access_token = credentials.token
+                if credentials.expiry:
+                    current_user.google_token_expiry = credentials.expiry
+                db.commit()
+
+            # Upload to Drive
+            drive_service = DriveService(credentials)
+
+            # Get or create app folder (inside user's folder if specified)
+            app_folder_id = await drive_service.get_or_create_app_folder(
+                base_folder_id=current_user.drive_folder_id
+            )
+
+            # Upload PDF
+            drive_result = await drive_service.upload_pdf(
+                pdf_data=pdf_data,
+                filename=filename,
+                folder_id=app_folder_id
+            )
+
+            drive_url = drive_result.get('url')
+            drive_file_id = drive_result.get('id')
+            logger.info(f"Synced self-review to Drive: {drive_url}")
+
+        except Exception as e:
+            logger.error(f"Failed to sync to Google Drive: {e}")
+            # Don't fail the whole request if Drive sync fails
 
     # Serialize metrics for JSON storage
     serialized_metrics = serialize_for_json(metrics)
@@ -211,6 +253,7 @@ async def generate_self_review(
         file_type="self_review",
         filename=filename,
         mongo_file_id=mongo_file_id,  # MongoDB GridFS ObjectId
+        drive_file_id=drive_file_id,  # Google Drive file ID
         drive_url=drive_url,
         date_range_start=request.date_range.start,
         date_range_end=request.date_range.end,
@@ -249,6 +292,7 @@ async def get_self_review_history(
             "file_type": f.file_type,
             "filename": f.filename,
             "download_url": f"/api/files/{f.mongo_file_id}" if f.mongo_file_id else None,
+            "drive_file_id": f.drive_file_id,
             "drive_url": f.drive_url,
             "google_slides_id": f.google_slides_id,
             "date_range_start": f.date_range_start,
@@ -281,6 +325,26 @@ async def delete_self_review(
     if file.mongo_file_id:
         mongo_storage = get_mongo_storage()
         await mongo_storage.delete_file(file.mongo_file_id)
+
+    # Delete from Google Drive
+    if file.drive_file_id:
+        try:
+            from app.services.drive import DriveService
+            from app.services.google_auth import GoogleAuthService
+
+            google_auth = GoogleAuthService()
+            credentials = google_auth.get_credentials(
+                access_token=current_user.google_access_token,
+                refresh_token=current_user.google_refresh_token,
+                token_expiry=current_user.google_token_expiry
+            )
+
+            drive_service = DriveService(credentials)
+            await drive_service.delete_file(file.drive_file_id)
+            logger.info(f"Deleted file from Drive: {file.drive_file_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete from Drive: {e}")
+            # Continue with deletion even if Drive delete fails
 
     db.delete(file)
     db.commit()

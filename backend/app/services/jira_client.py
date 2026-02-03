@@ -25,42 +25,7 @@ class JiraClient:
                 url=url,
                 auth=self.auth,
                 headers=self.headers,
-                timeout=30.0,
                 **kwargs
-            )
-            response.raise_for_status()
-            return response.json()
-
-    async def _search_jql(self, jql: str, fields: list, max_results: int = 100) -> dict:
-        """Search issues using the new JQL endpoint (replaces deprecated /search)."""
-        url = f"{self.base_url}/rest/api/3/search/jql"
-
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                url=url,
-                auth=self.auth,
-                headers=self.headers,
-                params={
-                    "jql": jql,
-                    "maxResults": max_results,
-                    "fields": ",".join(fields) if isinstance(fields, list) else fields
-                },
-                timeout=30.0
-            )
-            response.raise_for_status()
-            return response.json()
-
-    async def _post_request(self, endpoint: str, json_data: dict, api_version: str = "3") -> dict:
-        """Make authenticated POST request to Jira API."""
-        url = f"{self.base_url}/rest/api/{api_version}/{endpoint}"
-
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url=url,
-                auth=self.auth,
-                headers=self.headers,
-                json=json_data,
-                timeout=30.0
             )
             response.raise_for_status()
             return response.json()
@@ -75,7 +40,6 @@ class JiraClient:
                 url=url,
                 auth=self.auth,
                 headers=self.headers,
-                timeout=30.0,
                 **kwargs
             )
             response.raise_for_status()
@@ -152,32 +116,18 @@ class JiraClient:
             assignee: Optional[str] = None
     ) -> list[JiraIssue]:
         """Get issues updated within a date range using JQL."""
-        # Format dates as YYYY-MM-DD (Jira JQL format)
-        start_str = start_date.strftime("%Y-%m-%d")
-        end_str = end_date.strftime("%Y-%m-%d")
-
-        jql = f'project = "{project_key}" AND updated >= "{start_str}" AND updated <= "{end_str}"'
+        jql = f'project = "{project_key}" AND updated >= "{start_date.strftime("%Y-%m-%d")}" AND updated <= "{end_date.strftime("%Y-%m-%d")}"'
 
         if assignee:
             jql += f' AND assignee = "{assignee}"'
 
         jql += " ORDER BY updated DESC"
 
-        # Use new /search/jql endpoint (old /search was deprecated)
-        data = await self._search_jql(
-            jql=jql,
-            fields=["summary", "status", "issuetype", "assignee", "priority", "labels", "created", "resolutiondate",
-                    "customfield_10016"],
-            max_results=100
-        )
-        return self._parse_issues(data.get("issues", []))
-
-    async def get_issues_by_sprint(self, sprint_id: int) -> list[JiraIssue]:
-        """Get all issues in a specific sprint."""
-        data = await self._agile_request(
+        data = await self._request(
             "GET",
-            f"sprint/{sprint_id}/issue",
+            "search",
             params={
+                "jql": jql,
                 "maxResults": 100,
                 "fields": "summary,status,issuetype,assignee,priority,labels,created,resolutiondate,customfield_10016"
             }
@@ -218,10 +168,12 @@ class JiraClient:
         for issue in issues:
             fields = issue.get("fields", {})
 
-            # Get assignee name
+            # Get assignee - store both displayName and emailAddress for matching
             assignee = None
+            assignee_email = None
             if fields.get("assignee"):
                 assignee = fields["assignee"].get("displayName")
+                assignee_email = fields["assignee"].get("emailAddress")
 
             # Get story points (custom field - may vary by Jira instance)
             story_points = fields.get("customfield_10016")  # Common field ID
@@ -232,6 +184,7 @@ class JiraClient:
                 status=fields.get("status", {}).get("name", "Unknown"),
                 issue_type=fields.get("issuetype", {}).get("name", "Task"),
                 assignee=assignee,
+                assignee_email=assignee_email,
                 story_points=story_points,
                 priority=fields.get("priority", {}).get("name"),
                 labels=fields.get("labels", []),
@@ -281,42 +234,96 @@ class JiraClient:
             "issues": [i.model_dump() for i in issues]
         }
 
-    async def get_project_metrics_by_sprint(
+    # ============== User-specific methods for Analytics ==============
+
+    async def get_sprint_issues_for_user(
+            self,
+            sprint_id: int,
+            user_email: str
+    ) -> list[JiraIssue]:
+        """Get issues in a sprint assigned to a specific user."""
+        # Get all sprint issues first
+        data = await self._agile_request(
+            "GET",
+            f"sprint/{sprint_id}/issue",
+            params={
+                "maxResults": 100,
+                "fields": "summary,status,issuetype,assignee,priority,labels,created,resolutiondate,customfield_10016"
+            }
+        )
+
+        all_issues = self._parse_issues(data.get("issues", []))
+
+        # Filter by assignee email (primary) or displayName (fallback)
+        user_issues = []
+        user_email_lower = user_email.lower()
+
+        for issue in all_issues:
+            # Check email first (most accurate)
+            if issue.assignee_email and issue.assignee_email.lower() == user_email_lower:
+                user_issues.append(issue)
+            # Fallback: partial match on displayName
+            elif issue.assignee and (
+                    user_email_lower in issue.assignee.lower() or
+                    issue.assignee.lower() in user_email_lower
+            ):
+                user_issues.append(issue)
+
+        return user_issues
+
+    async def get_issues_for_user(
             self,
             project_key: str,
-            sprint_id: int
-    ) -> dict:
-        """Get comprehensive metrics for a specific sprint."""
-        issues = await self.get_issues_by_sprint(sprint_id)
+            user_email: str,
+            start_date: datetime,
+            end_date: datetime
+    ) -> list[JiraIssue]:
+        """Get all issues assigned to a user within date range."""
+        jql = f'project = "{project_key}" AND assignee = "{user_email}" AND updated >= "{start_date.strftime("%Y-%m-%d")}" AND updated <= "{end_date.strftime("%Y-%m-%d")}" ORDER BY updated DESC'
 
-        # Calculate metrics
-        total_issues = len(issues)
-        completed = [i for i in issues if i.status.lower() in ["done", "closed", "resolved"]]
-        in_progress = [i for i in issues if i.status.lower() in ["in progress", "in review"]]
+        data = await self._request(
+            "GET",
+            "search",
+            params={
+                "jql": jql,
+                "maxResults": 100,
+                "fields": "summary,status,issuetype,assignee,priority,labels,created,resolutiondate,customfield_10016"
+            }
+        )
+        return self._parse_issues(data.get("issues", []))
 
-        # Story points
-        total_points = sum(i.story_points or 0 for i in issues)
-        completed_points = sum(i.story_points or 0 for i in completed)
+    async def get_user_sprint_history(
+            self,
+            board_id: int,
+            user_email: str,
+            num_sprints: int = 10
+    ) -> list[dict]:
+        """Get user's performance history across sprints."""
+        # Get closed + active sprints
+        all_sprints = await self.get_sprints(board_id)
 
-        # By type
-        by_type = {}
-        for issue in issues:
-            by_type[issue.issue_type] = by_type.get(issue.issue_type, 0) + 1
+        # Filter and sort
+        relevant_sprints = sorted(
+            [s for s in all_sprints if s.state in ['closed', 'active']],
+            key=lambda x: x.start_date or datetime.min,
+            reverse=True
+        )[:num_sprints]
 
-        # By assignee
-        by_assignee = {}
-        for issue in issues:
-            name = issue.assignee or "Unassigned"
-            by_assignee[name] = by_assignee.get(name, 0) + 1
+        history = []
+        for sprint in reversed(relevant_sprints):  # Oldest first for charts
+            issues = await self.get_sprint_issues_for_user(sprint.id, user_email)
 
-        return {
-            "total_issues": total_issues,
-            "completed_issues": len(completed),
-            "in_progress_issues": len(in_progress),
-            "completion_rate": round(len(completed) / total_issues * 100, 1) if total_issues > 0 else 0,
-            "total_story_points": total_points,
-            "completed_story_points": completed_points,
-            "by_type": by_type,
-            "by_assignee": by_assignee,
-            "issues": [i.model_dump() for i in issues]
-        }
+            completed = [i for i in issues if i.status.lower() in ['done', 'closed', 'resolved']]
+
+            history.append({
+                "sprint_id": sprint.id,
+                "sprint_name": sprint.name,
+                "sprint_state": sprint.state,
+                "total_issues": len(issues),
+                "completed_issues": len(completed),
+                "total_points": sum(i.story_points or 0 for i in issues),
+                "completed_points": sum(i.story_points or 0 for i in completed),
+                "completion_rate": round(len(completed) / len(issues) * 100, 1) if issues else 0
+            })
+
+        return history

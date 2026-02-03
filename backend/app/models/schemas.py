@@ -20,8 +20,7 @@ class UserUpdate(BaseModel):
     jira_email: Optional[str] = None
     jira_api_token: Optional[str] = None
     scheduler_enabled: Optional[bool] = None
-    scheduler_frequency: Optional[str] = None  # 'daily', 'weekly', 'custom'
-    scheduler_days: Optional[str] = None  # comma-separated: "mon,wed,fri"
+    scheduler_day_of_week: Optional[str] = None
     scheduler_hour: Optional[int] = None
     scheduler_minute: Optional[int] = None
     sync_to_drive: Optional[bool] = None
@@ -31,8 +30,7 @@ class UserUpdate(BaseModel):
 class UserResponse(UserBase):
     id: int
     scheduler_enabled: bool
-    scheduler_frequency: str
-    scheduler_days: str
+    scheduler_day_of_week: str
     scheduler_hour: int
     scheduler_minute: int
     sync_to_drive: bool
@@ -71,6 +69,7 @@ class JiraIssue(BaseModel):
     status: str
     issue_type: str
     assignee: Optional[str] = None
+    assignee_email: Optional[str] = None  # Email for better matching
     story_points: Optional[float] = None
     priority: Optional[str] = None
     labels: list[str] = []
@@ -98,7 +97,7 @@ class DemoGenerateRequest(BaseModel):
 class DemoGenerateResponse(BaseModel):
     id: int
     google_slides_url: str
-    mongo_file_id: Optional[str] = None
+    firebase_url: Optional[str] = None
     drive_url: Optional[str] = None
     metrics: dict
 
@@ -124,7 +123,7 @@ class SelfReviewRecommendResponse(BaseModel):
 
 class SelfReviewGenerateResponse(BaseModel):
     id: int
-    download_url: str  # /api/files/{mongo_file_id}
+    firebase_url: str
     drive_url: Optional[str] = None
     metrics: dict
 
@@ -157,8 +156,7 @@ class GeneratedFileResponse(BaseModel):
     id: int
     file_type: str
     filename: str
-    mongo_file_id: Optional[str] = None
-    download_url: Optional[str] = None  # Computed from mongo_file_id
+    firebase_url: Optional[str] = None
     drive_url: Optional[str] = None
     google_slides_id: Optional[str] = None
     date_range_start: Optional[datetime] = None
@@ -175,8 +173,7 @@ class GeneratedFileResponse(BaseModel):
 
 class SchedulerSettings(BaseModel):
     enabled: bool
-    frequency: str  # 'daily', 'weekly', 'custom'
-    days: list[str]  # ['mon', 'wed', 'fri'] or ['thu'] etc.
+    day_of_week: str
     hour: int
     minute: int
 
