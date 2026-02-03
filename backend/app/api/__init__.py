@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.routes import jira, demo, review, settings, auth
+from app.api.routes import jira, demo, review, settings, auth, files, analytics
 
 api_router = APIRouter(prefix="/api")
 
@@ -8,5 +8,7 @@ api_router.include_router(jira.router)
 api_router.include_router(demo.router)
 api_router.include_router(review.router)
 api_router.include_router(settings.router)
+api_router.include_router(files.router)
+api_router.include_router(analytics.router)
 
 __all__ = ["api_router"]

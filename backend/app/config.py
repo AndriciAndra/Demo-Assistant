@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite:///./app.db"
 
-    # MongoDB (for PDF storage)
+    # MongoDB Atlas (for PDF storage)
     mongodb_url: str = ""
 
     # Jira
@@ -32,10 +32,6 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8000/api/auth/google/callback"
-
-    # Firebase
-    firebase_credentials_path: str = "./firebase-credentials.json"
-    firebase_storage_bucket: str = ""
 
     # Scheduler defaults
     scheduler_day_of_week: str = "thu"

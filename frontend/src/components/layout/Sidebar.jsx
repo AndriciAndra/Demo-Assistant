@@ -1,11 +1,12 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { Play, FileText, History, Settings, Sparkles, LogOut } from 'lucide-react';
+import { Play, FileText, History, Settings, Sparkles, LogOut, BarChart3 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 
 const navItems = [
   { to: '/', icon: Play, label: 'Demo Generator' },
   { to: '/review', icon: FileText, label: 'Self Review' },
+  { to: '/analytics', icon: BarChart3, label: 'My Performance' },
   { to: '/history', icon: History, label: 'History' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
@@ -21,7 +22,7 @@ export default function Sidebar({ jiraConnected, googleConnected }) {
           <Sparkles size={22} className="text-white" />
         </div>
         <div>
-          <h1 className="font-bold text-gray-800">Demo Generator</h1>
+          <h1 className="font-bold text-gray-800">Demo Assistant</h1>
           <p className="text-xs text-gray-400">Powered by AI</p>
         </div>
       </div>

@@ -7,9 +7,13 @@ from app.models import (
     SelfReviewGenerateRequest, SelfReviewGenerateResponse,
     SelfReviewRecommendRequest, SelfReviewRecommendResponse
 )
-from app.services import JiraClient, GeminiService, FirebaseService, PDFService
+from app.services import JiraClient, GeminiService, PDFService
+from app.services.mongo_storage import get_mongo_storage
 from app.api.deps import get_current_user
 from app.api.routes.jira import get_jira_client
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/self-review", tags=["self-review"])
 
@@ -26,6 +30,83 @@ def serialize_for_json(obj):
         return obj
 
 
+def calculate_cache_expiry_hours(user: User) -> int:
+    """
+    Calculate cache expiry based on user's scheduler settings.
+    """
+    if not user.scheduler_enabled:
+        return 168  # 7 days default
+
+    frequency = getattr(user, 'scheduler_frequency', 'weekly') or 'weekly'
+    days_str = getattr(user, 'scheduler_days', 'thu') or 'thu'
+    days = days_str.split(",") if days_str else ['thu']
+
+    if frequency == "daily":
+        return 36
+    elif frequency == "weekly":
+        return 192
+    elif frequency == "custom":
+        num_days = len(days)
+        if num_days >= 5:
+            return 36
+        elif num_days >= 3:
+            return 72
+        elif num_days >= 2:
+            return 96
+        else:
+            return 192
+    else:
+        return 168
+
+
+async def get_metrics_with_cache(
+        user: User,
+        project_key: str,
+        jira_client: JiraClient,
+        start_date: datetime,
+        end_date: datetime
+) -> dict:
+    """
+    Get metrics from cache if available, otherwise fetch from Jira.
+    """
+    mongo_storage = get_mongo_storage()
+
+    # Calculate cache expiry based on user's scheduler settings
+    max_cache_age_hours = calculate_cache_expiry_hours(user)
+    logger.info(f"Cache expiry for user {user.id}: {max_cache_age_hours} hours")
+
+    # Try to get cached data first
+    cached_data = await mongo_storage.get_cached_data(
+        user_id=user.id,
+        project_key=project_key,
+        max_age_hours=max_cache_age_hours
+    )
+
+    if cached_data:
+        logger.info(f"Using cached metrics for project {project_key}")
+        return cached_data
+
+    # No valid cache - fetch from Jira
+    logger.info(f"Fetching fresh metrics from Jira for project {project_key}")
+
+    metrics = await jira_client.get_project_metrics(project_key, start_date, end_date)
+
+    # Save to cache for future use
+    try:
+        await mongo_storage.save_cached_data(
+            user_id=user.id,
+            project_key=project_key,
+            data=serialize_for_json(metrics),
+            date_range_start=start_date,
+            date_range_end=end_date
+        )
+        logger.info(f"Cached metrics for project {project_key}")
+    except Exception as e:
+        logger.warning(f"Failed to cache metrics: {e}")
+
+    return metrics
+
+
 @router.post("/recommend", response_model=SelfReviewRecommendResponse)
 async def recommend_template(
         request: SelfReviewRecommendRequest,
@@ -34,11 +115,13 @@ async def recommend_template(
     """Get AI-recommended template based on work data."""
     jira_client = await get_jira_client(current_user)
 
-    # Get metrics
-    metrics = await jira_client.get_project_metrics(
-        request.jira_project_key,
-        request.date_range.start,
-        request.date_range.end
+    # Get metrics (with cache)
+    metrics = await get_metrics_with_cache(
+        user=current_user,
+        project_key=request.jira_project_key,
+        jira_client=jira_client,
+        start_date=request.date_range.start,
+        end_date=request.date_range.end
     )
 
     # Generate template recommendation
@@ -65,11 +148,13 @@ async def generate_self_review(
     """Generate a self-review PDF."""
     jira_client = await get_jira_client(current_user)
 
-    # Get metrics
-    metrics = await jira_client.get_project_metrics(
-        request.jira_project_key,
-        request.date_range.start,
-        request.date_range.end
+    # Get metrics (with cache)
+    metrics = await get_metrics_with_cache(
+        user=current_user,
+        project_key=request.jira_project_key,
+        jira_client=jira_client,
+        start_date=request.date_range.start,
+        end_date=request.date_range.end
     )
 
     # Get template
@@ -97,19 +182,69 @@ async def generate_self_review(
         date_range_end=request.date_range.end
     )
 
-    # Upload to Firebase
+    # Upload to MongoDB Atlas (replaces Firebase)
     filename = f"self_review_{request.jira_project_key}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
 
-    firebase = FirebaseService()
-    firebase_url = await firebase.upload_pdf(pdf_data, filename, current_user.id)
+    mongo_storage = get_mongo_storage()
+    mongo_file_id = await mongo_storage.upload_pdf(
+        pdf_data,
+        filename,
+        current_user.id,
+        metadata={
+            "file_type": "self_review",
+            "project_key": request.jira_project_key
+        }
+    )
 
-    # Optionally sync to Google Drive
+    # Sync to Google Drive if enabled
     drive_url = None
-    if current_user.sync_to_drive and current_user.drive_folder_id:
-        # TODO: Implement Drive sync
-        pass
+    drive_file_id = None
+    if current_user.sync_to_drive:
+        try:
+            from app.services.drive import DriveService
+            from app.services.google_auth import GoogleAuthService
 
-    # Serialize metrics for JSON storage (convert datetime objects to strings)
+            # Get Google credentials
+            google_auth = GoogleAuthService()
+            credentials = google_auth.get_credentials(
+                access_token=current_user.google_access_token,
+                refresh_token=current_user.google_refresh_token,
+                token_expiry=current_user.google_token_expiry
+            )
+
+            # Refresh if needed
+            if google_auth.is_token_expired(current_user.google_token_expiry):
+                credentials = await google_auth.refresh_credentials(credentials)
+                # Update tokens in database
+                current_user.google_access_token = credentials.token
+                if credentials.expiry:
+                    current_user.google_token_expiry = credentials.expiry
+                db.commit()
+
+            # Upload to Drive
+            drive_service = DriveService(credentials)
+
+            # Get or create app folder (inside user's folder if specified)
+            app_folder_id = await drive_service.get_or_create_app_folder(
+                base_folder_id=current_user.drive_folder_id
+            )
+
+            # Upload PDF
+            drive_result = await drive_service.upload_pdf(
+                pdf_data=pdf_data,
+                filename=filename,
+                folder_id=app_folder_id
+            )
+
+            drive_url = drive_result.get('url')
+            drive_file_id = drive_result.get('id')
+            logger.info(f"Synced self-review to Drive: {drive_url}")
+
+        except Exception as e:
+            logger.error(f"Failed to sync to Google Drive: {e}")
+            # Don't fail the whole request if Drive sync fails
+
+    # Serialize metrics for JSON storage
     serialized_metrics = serialize_for_json(metrics)
 
     # Save to database
@@ -117,7 +252,8 @@ async def generate_self_review(
         user_id=current_user.id,
         file_type="self_review",
         filename=filename,
-        firebase_url=firebase_url,
+        mongo_file_id=mongo_file_id,  # MongoDB GridFS ObjectId
+        drive_file_id=drive_file_id,  # Google Drive file ID
         drive_url=drive_url,
         date_range_start=request.date_range.start,
         date_range_end=request.date_range.end,
@@ -130,7 +266,7 @@ async def generate_self_review(
 
     return SelfReviewGenerateResponse(
         id=generated_file.id,
-        firebase_url=firebase_url,
+        download_url=f"/api/files/{mongo_file_id}",
         drive_url=drive_url,
         metrics=serialized_metrics
     )
@@ -148,7 +284,26 @@ async def get_self_review_history(
         GeneratedFile.file_type == "self_review"
     ).order_by(GeneratedFile.created_at.desc()).limit(limit).all()
 
-    return files
+    # Convert mongo_file_id to download URL
+    result = []
+    for f in files:
+        file_dict = {
+            "id": f.id,
+            "file_type": f.file_type,
+            "filename": f.filename,
+            "download_url": f"/api/files/{f.mongo_file_id}" if f.mongo_file_id else None,
+            "drive_file_id": f.drive_file_id,
+            "drive_url": f.drive_url,
+            "google_slides_id": f.google_slides_id,
+            "date_range_start": f.date_range_start,
+            "date_range_end": f.date_range_end,
+            "jira_project_key": f.jira_project_key,
+            "metrics": f.metrics,
+            "created_at": f.created_at
+        }
+        result.append(file_dict)
+
+    return result
 
 
 @router.delete("/{review_id}")
@@ -166,12 +321,30 @@ async def delete_self_review(
     if not file:
         raise HTTPException(status_code=404, detail="Self-review not found")
 
-    # Delete from Firebase
-    if file.firebase_url:
-        firebase = FirebaseService()
-        # Extract path and delete
-        path = f"users/{current_user.id}/self-reviews/{file.filename}"
-        await firebase.delete_file(path)
+    # Delete from MongoDB
+    if file.mongo_file_id:
+        mongo_storage = get_mongo_storage()
+        await mongo_storage.delete_file(file.mongo_file_id)
+
+    # Delete from Google Drive
+    if file.drive_file_id:
+        try:
+            from app.services.drive import DriveService
+            from app.services.google_auth import GoogleAuthService
+
+            google_auth = GoogleAuthService()
+            credentials = google_auth.get_credentials(
+                access_token=current_user.google_access_token,
+                refresh_token=current_user.google_refresh_token,
+                token_expiry=current_user.google_token_expiry
+            )
+
+            drive_service = DriveService(credentials)
+            await drive_service.delete_file(file.drive_file_id)
+            logger.info(f"Deleted file from Drive: {file.drive_file_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete from Drive: {e}")
+            # Continue with deletion even if Drive delete fails
 
     db.delete(file)
     db.commit()

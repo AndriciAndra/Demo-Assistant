@@ -115,7 +115,7 @@ export default function ReviewPage() {
         <Alert type="success" className="mb-6">
           Self-review generated successfully!{' '}
           <a
-            href={result.firebase_url}
+            href={result.download_url}
             target="_blank"
             rel="noopener noreferrer"
             className="underline font-medium"

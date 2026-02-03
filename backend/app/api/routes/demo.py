@@ -6,11 +6,62 @@ from app.models import (
     User, GeneratedFile,
     DemoGenerateRequest, DemoGenerateResponse
 )
-from app.services import JiraClient, GeminiService, SlidesService, FirebaseService, GoogleAuthService
+from app.services import JiraClient, GeminiService, SlidesService, GoogleAuthService
+from app.services.mongo_storage import get_mongo_storage
 from app.api.deps import get_current_user
 from app.api.routes.jira import get_jira_client
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/demo", tags=["demo"])
+
+
+def serialize_for_json(obj):
+    """Recursively convert datetime objects to ISO strings for JSON serialization."""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {k: serialize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [serialize_for_json(item) for item in obj]
+    return obj
+
+
+def calculate_cache_expiry_hours(user: User) -> int:
+    """
+    Calculate cache expiry based on user's scheduler settings.
+
+    Cache should be valid until next scheduled run + buffer.
+    """
+    if not user.scheduler_enabled:
+        # No scheduler - use 7 days default
+        return 168
+
+    frequency = getattr(user, 'scheduler_frequency', 'weekly') or 'weekly'
+    days_str = getattr(user, 'scheduler_days', 'thu') or 'thu'
+    days = days_str.split(",") if days_str else ['thu']
+
+    if frequency == "daily":
+        # Runs every day → cache valid 36 hours (1.5 days buffer)
+        return 36
+    elif frequency == "weekly":
+        # Runs once per week → cache valid 192 hours (8 days)
+        return 192
+    elif frequency == "custom":
+        # Based on number of days selected
+        num_days = len(days)
+        if num_days >= 5:  # Almost daily
+            return 36
+        elif num_days >= 3:  # 3-4 times per week
+            return 72  # 3 days
+        elif num_days >= 2:  # Twice per week
+            return 96  # 4 days
+        else:  # Once per week
+            return 192  # 8 days
+    else:
+        # Default fallback
+        return 168  # 7 days
 
 
 def serialize_for_json(obj):
@@ -46,6 +97,61 @@ async def get_user_google_credentials(user: User):
     return credentials
 
 
+async def get_metrics_with_cache(
+        user: User,
+        project_key: str,
+        jira_client: JiraClient,
+        start_date: datetime = None,
+        end_date: datetime = None,
+        sprint_id: int = None
+) -> dict:
+    """
+    Get metrics from cache if available, otherwise fetch from Jira.
+
+    Cache expiry is calculated based on user's scheduler settings.
+    """
+    mongo_storage = get_mongo_storage()
+
+    # Calculate cache expiry based on user's scheduler settings
+    max_cache_age_hours = calculate_cache_expiry_hours(user)
+    logger.info(f"Cache expiry for user {user.id}: {max_cache_age_hours} hours")
+
+    # Try to get cached data first
+    cached_data = await mongo_storage.get_cached_data(
+        user_id=user.id,
+        project_key=project_key,
+        max_age_hours=max_cache_age_hours
+    )
+
+    if cached_data:
+        logger.info(f"Using cached metrics for project {project_key}")
+        return cached_data
+
+    # No valid cache - fetch from Jira
+    logger.info(f"Fetching fresh metrics from Jira for project {project_key}")
+
+    if sprint_id:
+        metrics = await jira_client.get_project_metrics_by_sprint(project_key, sprint_id)
+    else:
+        metrics = await jira_client.get_project_metrics(project_key, start_date, end_date)
+
+    # Save to cache for future use
+    try:
+        await mongo_storage.save_cached_data(
+            user_id=user.id,
+            project_key=project_key,
+            data=serialize_for_json(metrics),
+            date_range_start=start_date,
+            date_range_end=end_date,
+            sprint_id=str(sprint_id) if sprint_id else None
+        )
+        logger.info(f"Cached metrics for project {project_key}")
+    except Exception as e:
+        logger.warning(f"Failed to cache metrics: {e}")
+
+    return metrics
+
+
 @router.post("/generate", response_model=DemoGenerateResponse)
 async def generate_demo(
         request: DemoGenerateRequest,
@@ -58,9 +164,7 @@ async def generate_demo(
 
     # Determine how to get metrics
     if request.sprint_id:
-        # Use sprint API directly - more reliable
-        print(f"DEBUG: Using sprint_id = {request.sprint_id}")
-        metrics = await jira_client.get_project_metrics_by_sprint(request.jira_project_key, request.sprint_id)
+        logger.info(f"Generating demo using sprint_id = {request.sprint_id}")
 
         # Get sprint info for date range
         board_id = await jira_client.get_board_id(request.jira_project_key)
@@ -79,14 +183,28 @@ async def generate_demo(
         else:
             end_date = datetime.now()
 
+        # Get metrics (with cache)
+        metrics = await get_metrics_with_cache(
+            user=current_user,
+            project_key=request.jira_project_key,
+            jira_client=jira_client,
+            start_date=start_date,
+            end_date=end_date,
+            sprint_id=request.sprint_id
+        )
+
     elif request.date_range:
-        print(f"DEBUG: Using date_range = {request.date_range.start} to {request.date_range.end}")
+        logger.info(f"Generating demo using date_range = {request.date_range.start} to {request.date_range.end}")
         start_date = request.date_range.start
         end_date = request.date_range.end
-        metrics = await jira_client.get_project_metrics(
-            request.jira_project_key,
-            start_date,
-            end_date
+
+        # Get metrics (with cache)
+        metrics = await get_metrics_with_cache(
+            user=current_user,
+            project_key=request.jira_project_key,
+            jira_client=jira_client,
+            start_date=start_date,
+            end_date=end_date
         )
     else:
         raise HTTPException(
@@ -94,7 +212,7 @@ async def generate_demo(
             detail="Either date_range or sprint_id is required"
         )
 
-    print(f"DEBUG: Got metrics - total_issues={metrics.get('total_issues', 0)}")
+    logger.info(f"Got metrics - total_issues={metrics.get('total_issues', 0)}")
 
     # Generate content with Gemini
     gemini = GeminiService()
@@ -108,17 +226,16 @@ async def generate_demo(
         content["title"] = request.title
 
     # Create Google Slides presentation
-    print("DEBUG: Creating Google Slides presentation...")
+    logger.info("Creating Google Slides presentation...")
     try:
         credentials = await get_user_google_credentials(current_user)
         slides_service = SlidesService(credentials)
         slides_result = await slides_service.create_demo_presentation(content)
         google_slides_url = slides_result["url"]
         google_slides_id = slides_result["presentation_id"]
-        print(f"DEBUG: Created presentation: {google_slides_id}")
+        logger.info(f"Created presentation: {google_slides_id}")
     except Exception as e:
-        print(f"DEBUG: Failed to create slides: {e}")
-        # Fall back to placeholder if slides creation fails
+        logger.error(f"Failed to create slides: {e}")
         google_slides_url = None
         google_slides_id = None
 
@@ -163,11 +280,13 @@ async def preview_demo(
     """Preview demo content without generating slides (by date range)."""
     jira_client = await get_jira_client(current_user)
 
-    # Get metrics
-    metrics = await jira_client.get_project_metrics(
-        jira_project_key,
-        start_date,
-        end_date
+    # Get metrics (with cache)
+    metrics = await get_metrics_with_cache(
+        user=current_user,
+        project_key=jira_project_key,
+        jira_client=jira_client,
+        start_date=start_date,
+        end_date=end_date
     )
 
     return {
@@ -185,15 +304,17 @@ async def preview_demo_by_sprint(
     """Preview demo content without generating slides (by sprint)."""
     jira_client = await get_jira_client(current_user)
 
-    # Get metrics by sprint
-    metrics = await jira_client.get_project_metrics_by_sprint(
-        jira_project_key,
-        sprint_id
+    # Get metrics (with cache)
+    metrics = await get_metrics_with_cache(
+        user=current_user,
+        project_key=jira_project_key,
+        jira_client=jira_client,
+        sprint_id=sprint_id
     )
 
     return {
         "metrics": metrics,
-        "content": None  # Don't generate AI content for preview, just metrics
+        "content": None
     }
 
 
@@ -226,12 +347,6 @@ async def delete_demo(
 
     if not file:
         raise HTTPException(status_code=404, detail="Demo not found")
-
-    # Delete from Firebase if exists
-    if file.firebase_url:
-        firebase = FirebaseService()
-        # Extract path from URL and delete
-        # await firebase.delete_file(path)
 
     db.delete(file)
     db.commit()

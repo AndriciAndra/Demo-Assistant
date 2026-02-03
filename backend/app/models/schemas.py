@@ -35,7 +35,7 @@ class UserResponse(UserBase):
     scheduler_minute: int
     sync_to_drive: bool
     created_at: datetime
-    
+
     class Config:
         from_attributes = True
 
@@ -69,6 +69,7 @@ class JiraIssue(BaseModel):
     status: str
     issue_type: str
     assignee: Optional[str] = None
+    assignee_email: Optional[str] = None  # Email for better matching
     story_points: Optional[float] = None
     priority: Optional[str] = None
     labels: list[str] = []
@@ -144,7 +145,7 @@ class TemplateResponse(TemplateBase):
     user_id: Optional[int] = None
     is_default: bool
     created_at: datetime
-    
+
     class Config:
         from_attributes = True
 
@@ -163,7 +164,7 @@ class GeneratedFileResponse(BaseModel):
     jira_project_key: Optional[str] = None
     metrics: Optional[dict] = None
     created_at: datetime
-    
+
     class Config:
         from_attributes = True
 
