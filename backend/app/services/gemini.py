@@ -1,4 +1,4 @@
-from google import genai
+import google.generativeai as genai
 from app.config import get_settings
 import json
 
@@ -10,8 +10,8 @@ class GeminiService:
 
     def __init__(self, api_key: str = None):
         self.api_key = api_key or settings.gemini_api_key
-        self.client = genai.Client(api_key=self.api_key)
-        self.model_name = "gemini-2.5-flash"
+        genai.configure(api_key=self.api_key)
+        self.model = genai.GenerativeModel("gemini-1.5-flash")
 
     async def generate_demo_content(self, metrics: dict, project_name: str) -> dict:
         """Generate demo presentation content from metrics."""
@@ -47,11 +47,7 @@ class GeminiService:
         Return ONLY valid JSON, no markdown formatting.
         """
 
-        # Use synchronous API (simpler and more reliable)
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=prompt
-        )
+        response = self.model.generate_content(prompt)
 
         # Parse JSON from response
         try:
@@ -117,10 +113,7 @@ class GeminiService:
             Use bullet points for clarity.
             """
 
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=prompt
-        )
+        response = self.model.generate_content(prompt)
         return response.text
 
     async def recommend_template(self, metrics: dict) -> str:
@@ -138,10 +131,7 @@ class GeminiService:
         Return ONLY the template text, no explanations.
         """
 
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=prompt
-        )
+        response = self.model.generate_content(prompt)
         return response.text
 
     def _format_issues(self, issues: list) -> str:
