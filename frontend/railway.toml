@@ -1,0 +1,16 @@
+# Railway configuration for Demo Assistant Frontend
+
+[build]
+builder = "nixpacks"
+buildCommand = "npm install && npm run build"
+
+[deploy]
+# Serve the built static files
+startCommand = "npx serve -s dist -l ${PORT:-3000}"
+healthcheckPath = "/"
+healthcheckTimeout = 100
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+# Environment variables (set these in Railway Dashboard)
+# VITE_API_URL=https://your-backend.up.railway.app

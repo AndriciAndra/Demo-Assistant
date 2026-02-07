@@ -1,0 +1,46 @@
+# Railway configuration for Demo Assistant Backend
+
+[build]
+builder = "nixpacks"
+buildCommand = "pip install -r requirements.txt"
+
+[deploy]
+startCommand = "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+healthcheckPath = "/health"
+healthcheckTimeout = 100
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+# Environment variables (set these in Railway Dashboard)
+# DATABASE_URL=sqlite:////data/demo_assistant.db
+# MONGODB_URL=mongodb+srv://...
+# SECRET_KEY=your-secure-secret-key
+# FRONTEND_URL=https://your-frontend.up.railway.app
+# GOOGLE_CLIENT_ID=...
+# GOOGLE_CLIENT_SECRET=...
+# GOOGLE_REDIRECT_URI=https://your-backend.up.railway.app/auth/google/callback
+# GEMINI_API_KEY=...
+# JIRA_CLIENT_ID=...
+# JIRA_CLIENT_SECRET=...
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

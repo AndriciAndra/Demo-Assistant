@@ -172,10 +172,11 @@ class GeneratedFileResponse(BaseModel):
 # ============== Settings Schemas ==============
 
 class SchedulerSettings(BaseModel):
-    enabled: bool
-    day_of_week: str
-    hour: int
-    minute: int
+    enabled: bool = True
+    frequency: Optional[str] = "weekly"  # weekly, daily, etc.
+    day_of_week: Optional[str] = "thu"  # mon, tue, wed, thu, fri
+    hour: int = 18
+    minute: int = 0
 
 
 class StorageSettings(BaseModel):

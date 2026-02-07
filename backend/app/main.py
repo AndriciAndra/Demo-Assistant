@@ -16,9 +16,9 @@ async def lifespan(app: FastAPI):
     init_db()
     scheduler_service.start()
     print("🚀 Application started")
-    
+
     yield
-    
+
     # Shutdown
     scheduler_service.shutdown()
     print("👋 Application shutdown")
@@ -31,10 +31,18 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware
+# CORS middleware - allow frontend URL dynamically
+allowed_origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    settings.frontend_url,
+]
+# Remove duplicates and empty strings
+allowed_origins = list(set(filter(None, allowed_origins)))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
