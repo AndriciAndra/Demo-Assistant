@@ -107,17 +107,26 @@ class DriveService:
 
     async def get_or_create_app_folder(
             self,
-            base_folder_id: Optional[str] = None
+            base_folder_id: Optional[str] = None,
+            create_subfolder: bool = False
     ) -> str:
         """
-        Get or create the Demo Assistant folder in Drive.
+        Get folder ID for uploading files.
 
         Args:
-            base_folder_id: Parent folder ID (user's configured folder or root)
+            base_folder_id: User's configured folder ID
+            create_subfolder: If True, create "Demo Assistant" subfolder inside base_folder
+                            If False (default), use base_folder directly
 
         Returns:
-            Folder ID for Demo Assistant
+            Folder ID to upload files to
         """
+        # If user specified a folder and we don't need subfolder, use it directly
+        if base_folder_id and not create_subfolder:
+            logger.info(f"Using user's configured folder directly: {base_folder_id}")
+            return base_folder_id
+
+        # Otherwise, get or create "Demo Assistant" folder
         folder_name = "Demo Assistant"
 
         # Search for existing folder

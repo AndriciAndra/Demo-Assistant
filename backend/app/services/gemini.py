@@ -11,7 +11,7 @@ class GeminiService:
     def __init__(self, api_key: str = None):
         self.api_key = api_key or settings.gemini_api_key
         genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel("gemini-1.5-flash")
+        self.model = genai.GenerativeModel("gemini-2.5-flash")
 
     async def generate_demo_content(self, metrics: dict, project_name: str) -> dict:
         """Generate demo presentation content from metrics."""

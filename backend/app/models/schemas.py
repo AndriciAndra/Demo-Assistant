@@ -123,7 +123,8 @@ class SelfReviewRecommendResponse(BaseModel):
 
 class SelfReviewGenerateResponse(BaseModel):
     id: int
-    firebase_url: str
+    download_url: Optional[str] = None  # MongoDB download URL
+    firebase_url: Optional[str] = None  # Legacy - no longer used
     drive_url: Optional[str] = None
     metrics: dict
 
@@ -174,7 +175,7 @@ class GeneratedFileResponse(BaseModel):
 class SchedulerSettings(BaseModel):
     enabled: bool = True
     frequency: Optional[str] = "weekly"  # weekly, daily, etc.
-    day_of_week: Optional[str] = "thu"  # mon, tue, wed, thu, fri
+    days: Optional[list[str]] = ["thu"]  # mon, tue, wed, thu, fri
     hour: int = 18
     minute: int = 0
 

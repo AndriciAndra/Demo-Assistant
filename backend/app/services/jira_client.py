@@ -234,6 +234,57 @@ class JiraClient:
             "issues": [i.model_dump() for i in issues]
         }
 
+    async def get_project_metrics_by_sprint(
+            self,
+            project_key: str,
+            sprint_id: int
+    ) -> dict:
+        """Get comprehensive metrics for a specific sprint."""
+        # Get sprint issues
+        data = await self._agile_request(
+            "GET",
+            f"sprint/{sprint_id}/issue",
+            params={
+                "maxResults": 100,
+                "fields": "summary,status,issuetype,assignee,priority,labels,created,resolutiondate,customfield_10016"
+            }
+        )
+
+        issues = self._parse_issues(data.get("issues", []))
+
+        # Calculate metrics
+        total_issues = len(issues)
+        completed = [i for i in issues if i.status.lower() in ["done", "closed", "resolved"]]
+        in_progress = [i for i in issues if i.status.lower() in ["in progress", "in review"]]
+
+        # Story points
+        total_points = sum(i.story_points or 0 for i in issues)
+        completed_points = sum(i.story_points or 0 for i in completed)
+
+        # By type
+        by_type = {}
+        for issue in issues:
+            by_type[issue.issue_type] = by_type.get(issue.issue_type, 0) + 1
+
+        # By assignee
+        by_assignee = {}
+        for issue in issues:
+            name = issue.assignee or "Unassigned"
+            by_assignee[name] = by_assignee.get(name, 0) + 1
+
+        return {
+            "sprint_id": sprint_id,
+            "total_issues": total_issues,
+            "completed_issues": len(completed),
+            "in_progress_issues": len(in_progress),
+            "completion_rate": round(len(completed) / total_issues * 100, 1) if total_issues > 0 else 0,
+            "total_story_points": total_points,
+            "completed_story_points": completed_points,
+            "by_type": by_type,
+            "by_assignee": by_assignee,
+            "issues": [i.model_dump() for i in issues]
+        }
+
     # ============== User-specific methods for Analytics ==============
 
     async def get_sprint_issues_for_user(

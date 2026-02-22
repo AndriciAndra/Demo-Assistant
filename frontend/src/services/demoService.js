@@ -12,8 +12,8 @@ const demoService = {
     const response = await api.get('/demo/preview', {
       params: {
         jira_project_key: projectKey,
-        start_date: startDate,
-        end_date: endDate,
+        start_date: new Date(startDate).toISOString(),  // Convert to ISO
+        end_date: new Date(endDate).toISOString(),      // Convert to ISO
       },
     });
     return response.data;
