@@ -30,22 +30,19 @@ export default function DemoPage() {
   useEffect(() => {
     if (selectedProject) {
       loadSprints();
-      setSelectedSprint(''); // Reset sprint when project changes
+      setSelectedSprint('');
       setMetrics(null);
     }
   }, [selectedProject]);
 
-  // Auto-load metrics when sprint is selected
   useEffect(() => {
     if (selectedSprint && useSprintRange) {
       loadPreview();
     }
   }, [selectedSprint]);
 
-  // Auto-load metrics when date range changes (if using date range mode)
   useEffect(() => {
     if (!useSprintRange && selectedProject && dateRange.start && dateRange.end) {
-      // Debounce - only load after user stops changing dates
       const timer = setTimeout(() => {
         loadPreview();
       }, 500);
@@ -65,7 +62,18 @@ export default function DemoPage() {
   const loadSprints = async () => {
     try {
       const data = await jiraService.getSprints(selectedProject);
-      setSprints(data);
+      
+      // Filter: only closed and active sprints (no future)
+      // Sort: most recent first (by end_date or start_date)
+      const filteredSprints = data
+        .filter(s => s.state === 'closed' || s.state === 'active')
+        .sort((a, b) => {
+          const dateA = new Date(a.end_date || a.start_date || 0);
+          const dateB = new Date(b.end_date || b.start_date || 0);
+          return dateB - dateA; // Descending (newest first)
+        });
+      
+      setSprints(filteredSprints);
     } catch (err) {
       console.error('Failed to load sprints:', err);
     }
@@ -74,7 +82,6 @@ export default function DemoPage() {
   const loadPreview = async () => {
     if (!selectedProject) return;
     
-    // Need either sprint or date range
     if (useSprintRange && !selectedSprint) return;
     if (!useSprintRange && (!dateRange.start || !dateRange.end)) return;
 
@@ -83,10 +90,8 @@ export default function DemoPage() {
     try {
       let data;
       if (useSprintRange && selectedSprint) {
-        // Use sprint-based preview
         data = await demoService.previewBySprint(selectedProject, selectedSprint);
       } else {
-        // Use date range preview
         data = await demoService.preview(
           selectedProject,
           dateRange.start,
@@ -129,7 +134,6 @@ export default function DemoPage() {
 
   const handleSprintSelect = (sprintId) => {
     setSelectedSprint(sprintId);
-    // Find sprint and update date range for display
     const sprint = sprints.find(s => String(s.id) === String(sprintId));
     if (sprint && sprint.start_date && sprint.end_date) {
       setDateRange({
@@ -283,24 +287,17 @@ export default function DemoPage() {
       </div>
 
       {/* Generate Button */}
-      <Card className="p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="font-semibold text-gray-700">Ready to generate?</h3>
-            <p className="text-sm text-gray-400 mt-1">
-              AI will create a presentation based on your data
-            </p>
-          </div>
-          <Button
-            onClick={handleGenerate}
-            loading={isGenerating}
-            disabled={!selectedProject || (useSprintRange && !selectedSprint) || (!useSprintRange && (!dateRange.start || !dateRange.end))}
-          >
-            <Sparkles size={18} />
-            Generate Demo
-          </Button>
-        </div>
-      </Card>
+      <div className="flex justify-end">
+        <Button
+          onClick={handleGenerate}
+          loading={isGenerating}
+          disabled={!selectedProject || (useSprintRange && !selectedSprint) || !metrics}
+          size="lg"
+        >
+          <Sparkles size={20} />
+          Generate Demo Presentation
+        </Button>
+      </div>
     </div>
   );
 }
