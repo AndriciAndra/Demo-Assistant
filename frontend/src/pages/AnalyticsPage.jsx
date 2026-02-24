@@ -259,7 +259,7 @@ export default function AnalyticsPage() {
           <div className="grid grid-cols-5 gap-4 mb-8">
             <StatCard
               icon={Zap}
-              label="Avg Velocity"
+              label="Average Velocity"
               value={sprintData.summary.avg_velocity}
               subValue="story points/sprint"
               // trend={calculateTrend('velocity')}
@@ -267,7 +267,7 @@ export default function AnalyticsPage() {
             />
             <StatCard
               icon={Target}
-              label="Avg Completion"
+              label="Average Completion"
               value={`${sprintData.summary.avg_completion_rate}%`}
               subValue="issues completed"
               // trend={calculateTrend('completion_rate')}
@@ -275,8 +275,8 @@ export default function AnalyticsPage() {
             />
             <StatCard
               icon={Timer}
-              label="Avg Time to Complete"
-              value={`${sprintData.summary.avg_time_to_complete_days || 0}d`}
+              label="Average Time to Complete"
+              value={`${sprintData.summary.avg_time_to_complete_days || 0} days`}
               subValue="days per issue"
               color="bg-blue-500"
             />
@@ -311,9 +311,6 @@ export default function AnalyticsPage() {
                   <div className="text-4xl font-bold">
                     {currentSprint.my_stats?.completion_rate || 0}%
                   </div>
-                  <p className="text-sm opacity-80 mt-1">
-                    {currentSprint.my_stats?.completed_story_points || 0} / {currentSprint.my_stats?.total_story_points || 0} pts
-                  </p>
                   <p className="text-sm opacity-80">
                     {currentSprint.my_stats?.completed_issues || 0} / {currentSprint.my_stats?.total_issues || 0} issues
                   </p>

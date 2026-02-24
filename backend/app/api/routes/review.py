@@ -67,42 +67,124 @@ async def get_metrics_with_cache(
         start_date: datetime,
         end_date: datetime
 ) -> dict:
-    """Get metrics from cache if available, otherwise fetch from Jira."""
+    """
+    Get metrics from cache if available, otherwise fetch from Jira.
+    Uses sprint-based cache and combines sprints that overlap with date range.
+    """
     mongo_storage = get_mongo_storage()
 
     max_cache_age_hours = calculate_cache_expiry_hours(user)
     logger.info(f"Cache expiry for user {user.id}: {max_cache_age_hours} hours")
 
-    # Try to get cached data first
-    cached_data = await mongo_storage.get_cached_data(
+    # Get all cached sprints for this project
+    all_cached = await mongo_storage.get_all_sprint_caches(
         user_id=user.id,
         project_key=project_key,
         max_age_hours=max_cache_age_hours
     )
 
-    if cached_data:
-        logger.info(f"Using cached metrics for project {project_key}")
-        return cached_data
+    if all_cached:
+        logger.info(f"Found {len(all_cached)} cached sprints, filtering by date range")
 
-    # No valid cache - fetch from Jira
-    logger.info(f"Fetching fresh metrics from Jira for project {project_key}")
+        # Make start/end dates timezone-naive for comparison
+        start_naive = start_date.replace(tzinfo=None) if start_date.tzinfo else start_date
+        end_naive = end_date.replace(tzinfo=None) if end_date.tzinfo else end_date
 
-    metrics = await jira_client.get_project_metrics(project_key, start_date, end_date)
+        # Combine issues from sprints that overlap with the date range
+        combined_issues = []
+        seen_keys = set()
+        sprints_included = 0
 
-    # Save to cache for future use
-    try:
-        await mongo_storage.save_cached_data(
-            user_id=user.id,
-            project_key=project_key,
-            data=serialize_for_json(metrics),
-            date_range_start=start_date,
-            date_range_end=end_date
-        )
-        logger.info(f"Cached metrics for project {project_key}")
-    except Exception as e:
-        logger.warning(f"Failed to cache metrics: {e}")
+        for cache in all_cached:
+            sprint_name = cache.get('sprint_name', 'Unknown')
+            sprint_start = cache.get('sprint_start_date')
+            sprint_end = cache.get('sprint_end_date')
 
-    return metrics
+            # Check if sprint overlaps with date range
+            sprint_in_range = False
+
+            if sprint_start and sprint_end:
+                # Make timezone-naive
+                if hasattr(sprint_start, 'tzinfo') and sprint_start.tzinfo:
+                    sprint_start = sprint_start.replace(tzinfo=None)
+                if hasattr(sprint_end, 'tzinfo') and sprint_end.tzinfo:
+                    sprint_end = sprint_end.replace(tzinfo=None)
+
+                # Sprint overlaps if: sprint_start <= end_naive AND sprint_end >= start_naive
+                if sprint_start <= end_naive and sprint_end >= start_naive:
+                    sprint_in_range = True
+                    logger.info(f"Sprint {sprint_name} overlaps with date range")
+            else:
+                # No sprint dates - include anyway
+                sprint_in_range = True
+
+            if sprint_in_range:
+                sprints_included += 1
+                issues = cache.get('data', {}).get('issues', [])
+                logger.info(f"Including {len(issues)} issues from sprint {sprint_name}")
+
+                for issue in issues:
+                    issue_key = issue.get('key')
+                    if issue_key and issue_key not in seen_keys:
+                        seen_keys.add(issue_key)
+                        combined_issues.append(issue)
+
+        logger.info(f"Included {sprints_included} sprints, {len(combined_issues)} unique issues")
+
+        if combined_issues:
+            # Calculate metrics from combined issues
+            total_issues = len(combined_issues)
+            completed = [i for i in combined_issues if i.get('status', '').lower() in ['done', 'closed', 'resolved']]
+            in_progress = [i for i in combined_issues if i.get('status', '').lower() in ['in progress', 'in review']]
+
+            total_points = sum(i.get('story_points') or 0 for i in combined_issues)
+            completed_points = sum(i.get('story_points') or 0 for i in completed)
+
+            by_type = {}
+            for issue in combined_issues:
+                t = issue.get('issue_type', 'Task')
+                by_type[t] = by_type.get(t, 0) + 1
+
+            by_assignee = {}
+            for issue in combined_issues:
+                a = issue.get('assignee') or 'Unassigned'
+                by_assignee[a] = by_assignee.get(a, 0) + 1
+
+            metrics = {
+                "total_issues": total_issues,
+                "completed_issues": len(completed),
+                "in_progress_issues": len(in_progress),
+                "completion_rate": round(len(completed) / total_issues * 100, 1) if total_issues > 0 else 0,
+                "total_story_points": total_points,
+                "completed_story_points": completed_points,
+                "by_type": by_type,
+                "by_assignee": by_assignee,
+                "issues": combined_issues,
+                "from_cache": True,
+                "sprints_combined": sprints_included
+            }
+
+            logger.info(f"Returning {total_issues} issues from cache")
+            return metrics
+
+    # No cache - this will likely fail with 410 Gone error
+    # In production, you should run the scraper first
+    logger.warning(f"No cache available for project {project_key}. Please run the scraper first.")
+
+    # Return empty metrics rather than calling deprecated API
+    return {
+        "total_issues": 0,
+        "completed_issues": 0,
+        "in_progress_issues": 0,
+        "completion_rate": 0,
+        "total_story_points": 0,
+        "completed_story_points": 0,
+        "by_type": {},
+        "by_assignee": {},
+        "issues": [],
+        "from_cache": False,
+        "error": "No cached data available. Please run the data scraper in Settings."
+    }
 
 
 @router.post("/recommend", response_model=SelfReviewRecommendResponse)
@@ -180,8 +262,12 @@ async def generate_self_review(
         date_range_end=request.date_range.end
     )
 
-    # Upload to MongoDB Atlas
-    filename = f"self_review_{request.jira_project_key}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    # Build filename with date range + timestamp
+    date_format = "%d%b%Y"
+    start_str = request.date_range.start.strftime(date_format)
+    end_str = request.date_range.end.strftime(date_format)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f"self_review_{request.jira_project_key}_{start_str}-{end_str}_{timestamp}.pdf"
 
     mongo_storage = get_mongo_storage()
     mongo_file_id = await mongo_storage.upload_pdf(

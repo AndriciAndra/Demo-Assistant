@@ -338,8 +338,24 @@ async def generate_demo(
     if request.title:
         content["title"] = request.title
 
+    # Build presentation title with sprint name or date range
+    if sprint_name:
+        presentation_title = f"{sprint_name}: {request.jira_project_key} Demo"
+    else:
+        # Use date range in title
+        date_format = "%d %b %Y"
+        start_str = start_date.strftime(date_format)
+        end_str = end_date.strftime(date_format)
+        presentation_title = f"{request.jira_project_key} Demo ({start_str} - {end_str})"
+
+    # Update content title to match
+    content["title"] = presentation_title
+
     # Create Google Slides presentation
-    logger.info("Creating Google Slides presentation...")
+    logger.info(f"Creating Google Slides presentation: {presentation_title}")
+    google_slides_url = None
+    google_slides_id = None
+    
     try:
         credentials = await get_user_google_credentials(current_user)
         slides_service = SlidesService(credentials)
@@ -347,17 +363,59 @@ async def generate_demo(
         google_slides_url = slides_result["url"]
         google_slides_id = slides_result["presentation_id"]
         logger.info(f"Created presentation: {google_slides_id}")
+        
+        # Move presentation to user's specified folder if configured
+        if current_user.drive_folder_id and google_slides_id:
+            try:
+                from app.services.drive import DriveService
+                drive_service = DriveService(credentials)
+                
+                # Use user's folder directly (same behavior as self-review)
+                app_folder_id = await drive_service.get_or_create_app_folder(
+                    base_folder_id=current_user.drive_folder_id
+                )
+                
+                # Move the presentation to the folder
+                drive_service.service.files().update(
+                    fileId=google_slides_id,
+                    addParents=app_folder_id,
+                    removeParents='root',
+                    fields='id, parents'
+                ).execute()
+                
+                # Update the URL to reflect new location
+                google_slides_url = f"https://docs.google.com/presentation/d/{google_slides_id}/edit"
+                
+                logger.info(f"Moved presentation {google_slides_id} to folder {app_folder_id}")
+            except Exception as e:
+                logger.warning(f"Failed to move presentation to folder: {e}")
+                # Continue anyway - presentation is still created in root
+                
     except Exception as e:
         logger.error(f"Failed to create slides: {e}")
         google_slides_url = None
         google_slides_id = None
+
+    # Build filename with date range + timestamp
+    date_format = "%d%b%Y"
+    start_str = start_date.strftime(date_format)
+    end_str = end_date.strftime(date_format)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    if sprint_name:
+        # Sanitize sprint name for filename (remove special characters)
+        safe_sprint_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in sprint_name)
+        safe_sprint_name = safe_sprint_name.replace(' ', '_')
+        filename = f"demo_{safe_sprint_name}_{request.jira_project_key}_{timestamp}.pptx"
+    else:
+        filename = f"demo_{request.jira_project_key}_{start_str}-{end_str}_{timestamp}.pptx"
 
     # Save to database
     serialized_metrics = serialize_for_json(metrics)
     generated_file = GeneratedFile(
         user_id=current_user.id,
         file_type="demo",
-        filename=f"demo_{request.jira_project_key}_{datetime.now().strftime('%Y%m%d')}.pptx",
+        filename=filename,
         date_range_start=start_date,
         date_range_end=end_date,
         jira_project_key=request.jira_project_key,
@@ -475,6 +533,52 @@ async def delete_demo(
     if not file:
         raise HTTPException(status_code=404, detail="Demo not found")
 
+    # Delete from MongoDB if exists
+    if file.mongo_file_id:
+        try:
+            mongo_storage = get_mongo_storage()
+            await mongo_storage.delete_file(file.mongo_file_id)
+            logger.info(f"Deleted file from MongoDB: {file.mongo_file_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete from MongoDB: {e}")
+
+    # Delete from Google Drive if exists
+    if file.drive_file_id:
+        try:
+            from app.services.drive import DriveService
+
+            google_auth = GoogleAuthService()
+            credentials = google_auth.get_credentials(
+                access_token=current_user.google_access_token,
+                refresh_token=current_user.google_refresh_token,
+                token_expiry=current_user.google_token_expiry
+            )
+
+            drive_service = DriveService(credentials)
+            await drive_service.delete_file(file.drive_file_id)
+            logger.info(f"Deleted file from Drive: {file.drive_file_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete from Drive: {e}")
+
+    # Delete Google Slides presentation if exists
+    if file.google_slides_id:
+        try:
+            from app.services.drive import DriveService
+
+            google_auth = GoogleAuthService()
+            credentials = google_auth.get_credentials(
+                access_token=current_user.google_access_token,
+                refresh_token=current_user.google_refresh_token,
+                token_expiry=current_user.google_token_expiry
+            )
+
+            drive_service = DriveService(credentials)
+            await drive_service.delete_file(file.google_slides_id)
+            logger.info(f"Deleted Google Slides from Drive: {file.google_slides_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete Google Slides: {e}")
+
+    # Delete from database
     db.delete(file)
     db.commit()
 

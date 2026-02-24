@@ -5,6 +5,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib import colors
 from io import BytesIO
 from datetime import datetime
+import re
 
 
 class PDFService:
@@ -16,7 +17,6 @@ class PDFService:
 
     def _setup_custom_styles(self):
         """Setup custom paragraph styles."""
-        # Use unique names to avoid conflicts with existing styles
         self.styles.add(ParagraphStyle(
             name='CustomTitle',
             parent=self.styles['Heading1'],
@@ -31,10 +31,10 @@ class PDFService:
             fontSize=14,
             spaceBefore=20,
             spaceAfter=10,
-            textColor=colors.HexColor('#16213e')
+            textColor=colors.HexColor('#16213e'),
+            fontName='Helvetica-Bold'
         ))
 
-        # Renamed from 'BodyText' to 'CustomBodyText' to avoid conflict
         self.styles.add(ParagraphStyle(
             name='CustomBodyText',
             parent=self.styles['Normal'],
@@ -143,15 +143,14 @@ class PDFService:
 
         # Parse and format the AI-generated content
         content_paragraphs = self._parse_content(content)
-        for para in content_paragraphs:
-            if para.startswith('## '):
-                story.append(Paragraph(para[3:], self.styles['SectionHeader']))
-            elif para.startswith('- ') or para.startswith('• '):
-                story.append(Paragraph(f"• {para[2:]}", self.styles['BulletPoint']))
-            elif para.startswith('* '):
-                story.append(Paragraph(f"• {para[2:]}", self.styles['BulletPoint']))
-            elif para.strip():
-                story.append(Paragraph(para, self.styles['CustomBodyText']))
+        for para_type, para_text in content_paragraphs:
+            if para_type == 'header':
+                story.append(Paragraph(para_text, self.styles['SectionHeader']))
+            elif para_type == 'bullet':
+                story.append(Paragraph(f"• {para_text}", self.styles['BulletPoint']))
+            elif para_type == 'body':
+                # para_text already has <b> tags from markdown_to_pdf conversion
+                story.append(Paragraph(para_text, self.styles['CustomBodyText']))
 
         # Build PDF
         doc.build(story)
@@ -160,7 +159,16 @@ class PDFService:
         return buffer.getvalue()
 
     def _parse_content(self, content: str) -> list:
-        """Parse markdown-like content into paragraphs."""
+        """
+        Parse content into structured paragraphs with type information.
+        Returns list of tuples: (type, text) where type is 'header', 'bullet', or 'body'
+
+        Recognizes:
+        - ## Header or ### Header -> header
+        - **SECTION TITLE** at start of line -> header
+        - Lines starting with - or * or • -> bullet
+        - Everything else -> body (preserves <b> tags for inline bold)
+        """
         lines = content.split('\n')
         paragraphs = []
         current_para = []
@@ -168,21 +176,54 @@ class PDFService:
         for line in lines:
             stripped = line.strip()
 
-            # Headers and bullets are their own paragraphs
-            if stripped.startswith('## ') or stripped.startswith('- ') or \
-                    stripped.startswith('• ') or stripped.startswith('* '):
+            # Skip empty lines - they end current paragraph
+            if not stripped:
                 if current_para:
-                    paragraphs.append(' '.join(current_para))
+                    paragraphs.append(('body', ' '.join(current_para)))
                     current_para = []
-                paragraphs.append(stripped)
-            elif stripped:
-                current_para.append(stripped)
-            else:
-                if current_para:
-                    paragraphs.append(' '.join(current_para))
-                    current_para = []
+                continue
 
+            # Check for markdown headers: ## Title or ### Title
+            if stripped.startswith('## ') or stripped.startswith('### '):
+                if current_para:
+                    paragraphs.append(('body', ' '.join(current_para)))
+                    current_para = []
+                # Remove ## and any remaining markdown
+                header_text = re.sub(r'^#{1,6}\s*', '', stripped)
+                header_text = re.sub(r'\*\*(.+?)\*\*', r'\1', header_text)  # Remove ** if present
+                paragraphs.append(('header', header_text))
+                continue
+
+            # Check for bold section title at start of line: **TITLE** or <b>TITLE</b>
+            bold_match = re.match(r'^\*\*([A-Z][A-Z\s&]+)\*\*\s*$', stripped)
+            if not bold_match:
+                bold_match = re.match(r'^<b>([A-Z][A-Z\s&]+)</b>\s*$', stripped)
+
+            if bold_match:
+                if current_para:
+                    paragraphs.append(('body', ' '.join(current_para)))
+                    current_para = []
+                paragraphs.append(('header', bold_match.group(1)))
+                continue
+
+            # Check for bullet points
+            if stripped.startswith('- ') or stripped.startswith('* ') or stripped.startswith('• '):
+                if current_para:
+                    paragraphs.append(('body', ' '.join(current_para)))
+                    current_para = []
+                bullet_text = stripped[2:].strip()
+                # Convert any remaining markdown bold to HTML
+                bullet_text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', bullet_text)
+                paragraphs.append(('bullet', bullet_text))
+                continue
+
+            # Regular text - accumulate into paragraph
+            # Convert markdown bold to HTML bold for ReportLab
+            processed_line = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', stripped)
+            current_para.append(processed_line)
+
+        # Don't forget the last paragraph
         if current_para:
-            paragraphs.append(' '.join(current_para))
+            paragraphs.append(('body', ' '.join(current_para)))
 
         return paragraphs
