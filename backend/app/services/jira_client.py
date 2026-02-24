@@ -123,9 +123,10 @@ class JiraClient:
 
         jql += " ORDER BY updated DESC"
 
+        # Use GET /search/jql with query params (more reliable than POST)
         data = await self._request(
             "GET",
-            "search",
+            "search/jql",
             params={
                 "jql": jql,
                 "maxResults": 100,
@@ -332,9 +333,10 @@ class JiraClient:
         """Get all issues assigned to a user within date range."""
         jql = f'project = "{project_key}" AND assignee = "{user_email}" AND updated >= "{start_date.strftime("%Y-%m-%d")}" AND updated <= "{end_date.strftime("%Y-%m-%d")}" ORDER BY updated DESC'
 
+        # Use GET /search/jql with query params
         data = await self._request(
             "GET",
-            "search",
+            "search/jql",
             params={
                 "jql": jql,
                 "maxResults": 100,

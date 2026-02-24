@@ -2,6 +2,7 @@
 Scraper service for scheduled Jira data caching.
 Runs on schedule to fetch and cache Jira data for faster demo/review generation.
 Now uses MongoDB Atlas for persistent cache storage.
+Uses Agile API to fetch sprint-based data (more reliable than deprecated search API).
 """
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
@@ -33,6 +34,8 @@ async def scrape_jira_data_for_user(user_id: int):
     """
     Scrape Jira data for a specific user and cache it in MongoDB.
     Called by the scheduler.
+
+    Uses Agile API to fetch sprint-based data since the search API has been deprecated.
     """
     db: Session = SessionLocal()
 
@@ -68,34 +71,52 @@ async def scrape_jira_data_for_user(user_id: int):
         # Get MongoDB storage
         mongo_storage = get_mongo_storage()
 
-        # For each project, scrape recent data (last 30 days)
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=30)
-
         for project in projects:
             try:
                 logger.info(f"Scraping project {project.key} for user {user_id}")
 
-                # Get metrics for the project
-                metrics = await jira_client.get_project_metrics(
-                    project.key,
-                    start_date,
-                    end_date
-                )
+                # Get board ID for this project
+                board_id = await jira_client.get_board_id(project.key)
+                if not board_id:
+                    logger.warning(f"No board found for project {project.key}, skipping")
+                    continue
 
-                # Serialize metrics for JSON storage
-                serialized_metrics = serialize_for_json(metrics)
+                # Get all sprints (closed + active)
+                all_sprints = await jira_client.get_sprints(board_id)
+                relevant_sprints = [s for s in all_sprints if s.state in ['closed', 'active']]
 
-                # Save to MongoDB cache
-                await mongo_storage.save_cached_data(
-                    user_id=user_id,
-                    project_key=project.key,
-                    data=serialized_metrics,
-                    date_range_start=start_date,
-                    date_range_end=end_date
-                )
+                logger.info(f"Found {len(relevant_sprints)} relevant sprints for project {project.key}")
 
-                logger.info(f"Cached data for project {project.key}")
+                # Cache data for each sprint
+                for sprint in relevant_sprints:
+                    try:
+                        logger.info(f"Caching sprint {sprint.name} (ID: {sprint.id})")
+
+                        # Get metrics using Agile API (this works!)
+                        metrics = await jira_client.get_project_metrics_by_sprint(
+                            project.key,
+                            sprint.id
+                        )
+
+                        # Serialize metrics for JSON storage
+                        serialized_metrics = serialize_for_json(metrics)
+
+                        # Save to MongoDB cache with sprint_id and dates
+                        await mongo_storage.save_cached_data(
+                            user_id=user_id,
+                            project_key=project.key,
+                            data=serialized_metrics,
+                            sprint_id=str(sprint.id),
+                            sprint_name=sprint.name,
+                            sprint_start_date=sprint.start_date,
+                            sprint_end_date=sprint.end_date
+                        )
+
+                        logger.info(f"Cached sprint {sprint.name}: {metrics.get('total_issues', 0)} issues")
+
+                    except Exception as e:
+                        logger.error(f"Failed to cache sprint {sprint.name}: {e}")
+                        continue
 
             except Exception as e:
                 logger.error(f"Failed to scrape project {project.key}: {e}")
@@ -124,20 +145,21 @@ def scrape_jira_data_sync(user_id: int):
         loop.close()
 
 
-async def get_cached_data(user_id: int, project_key: str, max_age_hours: int = 24):
+async def get_cached_data(user_id: int, project_key: str, sprint_id: str = None, max_age_hours: int = 24):
     """
     Get cached Jira data from MongoDB if it exists and is not too old.
 
     Args:
         user_id: User ID
         project_key: Jira project key
+        sprint_id: Optional sprint ID to get specific sprint cache
         max_age_hours: Maximum age of cache in hours (default 24)
 
     Returns:
         Cached data dict or None if not found/expired
     """
     mongo_storage = get_mongo_storage()
-    return await mongo_storage.get_cached_data(user_id, project_key, max_age_hours)
+    return await mongo_storage.get_cached_data(user_id, project_key, sprint_id, max_age_hours)
 
 
 async def delete_user_cache(user_id: int):

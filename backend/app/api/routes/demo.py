@@ -92,7 +92,14 @@ async def get_user_google_credentials(user: User):
 
     # Refresh if expired
     if google_auth.is_token_expired(user.google_token_expiry):
-        credentials = await google_auth.refresh_credentials(credentials)
+        try:
+            credentials = await google_auth.refresh_credentials(credentials)
+        except Exception as e:
+            logger.error(f"Failed to refresh Google credentials: {e}")
+            raise HTTPException(
+                status_code=401,
+                detail="Google session expired. Please reconnect your Google account in Settings."
+            )
 
     return credentials
 
@@ -108,6 +115,9 @@ async def get_metrics_with_cache(
     """
     Get metrics from cache if available, otherwise fetch from Jira.
 
+    For sprint_id: looks up cache by sprint_id
+    For date range: combines data from all cached sprints that overlap with the date range
+
     Cache expiry is calculated based on user's scheduler settings.
     """
     mongo_storage = get_mongo_storage()
@@ -116,40 +126,140 @@ async def get_metrics_with_cache(
     max_cache_age_hours = calculate_cache_expiry_hours(user)
     logger.info(f"Cache expiry for user {user.id}: {max_cache_age_hours} hours")
 
-    # Try to get cached data first
-    cached_data = await mongo_storage.get_cached_data(
-        user_id=user.id,
-        project_key=project_key,
-        max_age_hours=max_cache_age_hours
-    )
-
-    if cached_data:
-        logger.info(f"Using cached metrics for project {project_key}")
-        return cached_data
-
-    # No valid cache - fetch from Jira
-    logger.info(f"Fetching fresh metrics from Jira for project {project_key}")
-
     if sprint_id:
-        metrics = await jira_client.get_project_metrics_by_sprint(project_key, sprint_id)
-    else:
-        metrics = await jira_client.get_project_metrics(project_key, start_date, end_date)
-
-    # Save to cache for future use
-    try:
-        await mongo_storage.save_cached_data(
+        # Sprint-based lookup - simple case
+        cached_data = await mongo_storage.get_cached_data(
             user_id=user.id,
             project_key=project_key,
-            data=serialize_for_json(metrics),
-            date_range_start=start_date,
-            date_range_end=end_date,
-            sprint_id=str(sprint_id) if sprint_id else None
+            sprint_id=str(sprint_id),
+            max_age_hours=max_cache_age_hours
         )
-        logger.info(f"Cached metrics for project {project_key}")
-    except Exception as e:
-        logger.warning(f"Failed to cache metrics: {e}")
 
-    return metrics
+        if cached_data:
+            logger.info(f"Using cached metrics for project {project_key}, sprint {sprint_id}")
+            return cached_data
+
+        # No cache - fetch from Jira
+        logger.info(f"Fetching fresh metrics from Jira for project {project_key}, sprint {sprint_id}")
+        metrics = await jira_client.get_project_metrics_by_sprint(project_key, sprint_id)
+
+        # Save to cache
+        try:
+            await mongo_storage.save_cached_data(
+                user_id=user.id,
+                project_key=project_key,
+                data=serialize_for_json(metrics),
+                sprint_id=str(sprint_id)
+            )
+            logger.info(f"Cached metrics for project {project_key}, sprint {sprint_id}")
+        except Exception as e:
+            logger.warning(f"Failed to cache metrics: {e}")
+
+        return metrics
+
+    else:
+        # Date range lookup - combine from sprint caches
+        logger.info(f"Looking up cached sprints for date range {start_date} to {end_date}")
+
+        # Get all cached sprints for this project
+        all_cached = await mongo_storage.get_all_sprint_caches(
+            user_id=user.id,
+            project_key=project_key,
+            max_age_hours=max_cache_age_hours
+        )
+
+        if all_cached:
+            logger.info(f"Found {len(all_cached)} cached sprints, filtering by date range")
+
+            # Make start/end dates timezone-naive for comparison
+            start_naive = start_date.replace(tzinfo=None) if start_date.tzinfo else start_date
+            end_naive = end_date.replace(tzinfo=None) if end_date.tzinfo else end_date
+
+            # Combine issues from sprints that overlap with the date range
+            combined_issues = []
+            seen_keys = set()
+            sprints_included = 0
+
+            for cache in all_cached:
+                sprint_name = cache.get('sprint_name', 'Unknown')
+                sprint_start = cache.get('sprint_start_date')
+                sprint_end = cache.get('sprint_end_date')
+
+                # Check if sprint overlaps with date range
+                sprint_in_range = False
+
+                if sprint_start and sprint_end:
+                    # Make timezone-naive
+                    if hasattr(sprint_start, 'tzinfo') and sprint_start.tzinfo:
+                        sprint_start = sprint_start.replace(tzinfo=None)
+                    if hasattr(sprint_end, 'tzinfo') and sprint_end.tzinfo:
+                        sprint_end = sprint_end.replace(tzinfo=None)
+
+                    # Sprint overlaps if: sprint_start <= end_naive AND sprint_end >= start_naive
+                    if sprint_start <= end_naive and sprint_end >= start_naive:
+                        sprint_in_range = True
+                        logger.info(f"Sprint {sprint_name} ({sprint_start} - {sprint_end}) overlaps with range")
+                else:
+                    # No sprint dates - include anyway
+                    sprint_in_range = True
+                    logger.info(f"Sprint {sprint_name} has no dates, including anyway")
+
+                if sprint_in_range:
+                    sprints_included += 1
+                    issues = cache.get('data', {}).get('issues', [])
+                    logger.info(f"Including {len(issues)} issues from sprint {sprint_name}")
+
+                    for issue in issues:
+                        issue_key = issue.get('key')
+                        if issue_key and issue_key not in seen_keys:
+                            seen_keys.add(issue_key)
+                            combined_issues.append(issue)
+
+            logger.info(f"Included {sprints_included} sprints, {len(combined_issues)} unique issues")
+
+            if combined_issues:
+                # Calculate metrics from combined issues
+                total_issues = len(combined_issues)
+                completed = [i for i in combined_issues if
+                             i.get('status', '').lower() in ['done', 'closed', 'resolved']]
+                in_progress = [i for i in combined_issues if
+                               i.get('status', '').lower() in ['in progress', 'in review']]
+
+                total_points = sum(i.get('story_points') or 0 for i in combined_issues)
+                completed_points = sum(i.get('story_points') or 0 for i in completed)
+
+                by_type = {}
+                for issue in combined_issues:
+                    t = issue.get('issue_type', 'Task')
+                    by_type[t] = by_type.get(t, 0) + 1
+
+                by_assignee = {}
+                for issue in combined_issues:
+                    a = issue.get('assignee') or 'Unassigned'
+                    by_assignee[a] = by_assignee.get(a, 0) + 1
+
+                metrics = {
+                    "total_issues": total_issues,
+                    "completed_issues": len(completed),
+                    "in_progress_issues": len(in_progress),
+                    "completion_rate": round(len(completed) / total_issues * 100, 1) if total_issues > 0 else 0,
+                    "total_story_points": total_points,
+                    "completed_story_points": completed_points,
+                    "by_type": by_type,
+                    "by_assignee": by_assignee,
+                    "issues": combined_issues,
+                    "from_cache": True,
+                    "sprints_combined": len(all_cached)
+                }
+
+                logger.info(f"Returning {total_issues} issues from cache (filtered by date range)")
+                return metrics
+
+        # No cache or empty cache - fetch from Jira using date range
+        logger.info(f"No cache available, fetching from Jira for date range")
+        metrics = await jira_client.get_project_metrics(project_key, start_date, end_date)
+
+        return metrics
 
 
 @router.post("/generate", response_model=DemoGenerateResponse)
@@ -170,6 +280,7 @@ async def generate_demo(
         board_id = await jira_client.get_board_id(request.jira_project_key)
         sprints = await jira_client.get_sprints(board_id)
         sprint = next((s for s in sprints if s.id == request.sprint_id), None)
+        sprint_name = sprint.name if sprint else None
 
         if sprint and sprint.start_date:
             start_date = datetime.fromisoformat(str(sprint.start_date).replace('Z', '+00:00')) if isinstance(
@@ -197,6 +308,7 @@ async def generate_demo(
         logger.info(f"Generating demo using date_range = {request.date_range.start} to {request.date_range.end}")
         start_date = request.date_range.start
         end_date = request.date_range.end
+        sprint_name = None  # No specific sprint
 
         # Get metrics (with cache)
         metrics = await get_metrics_with_cache(
@@ -214,11 +326,12 @@ async def generate_demo(
 
     logger.info(f"Got metrics - total_issues={metrics.get('total_issues', 0)}")
 
-    # Generate content with Gemini
+    # Generate content with Gemini (now with sprint_name for better context)
     gemini = GeminiService()
     content = await gemini.generate_demo_content(
         metrics,
-        request.jira_project_key
+        request.jira_project_key,
+        sprint_name=sprint_name
     )
 
     # Override title if provided
@@ -273,20 +386,34 @@ async def generate_demo(
 @router.get("/preview")
 async def preview_demo(
         jira_project_key: str,
-        start_date: datetime,
-        end_date: datetime,
+        start_date: str,
+        end_date: str,
         current_user: User = Depends(get_current_user)
 ):
     """Preview demo content without generating slides (by date range)."""
     jira_client = await get_jira_client(current_user)
+
+    # Parse dates - accept both 'YYYY-MM-DD' and ISO format
+    try:
+        if 'T' in start_date:
+            parsed_start = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+        else:
+            parsed_start = datetime.strptime(start_date, '%Y-%m-%d')
+
+        if 'T' in end_date:
+            parsed_end = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+        else:
+            parsed_end = datetime.strptime(end_date, '%Y-%m-%d')
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
 
     # Get metrics (with cache)
     metrics = await get_metrics_with_cache(
         user=current_user,
         project_key=jira_project_key,
         jira_client=jira_client,
-        start_date=start_date,
-        end_date=end_date
+        start_date=parsed_start,
+        end_date=parsed_end
     )
 
     return {
@@ -304,7 +431,7 @@ async def preview_demo_by_sprint(
     """Preview demo content without generating slides (by sprint)."""
     jira_client = await get_jira_client(current_user)
 
-    # Get metrics (with cache)
+    # Get metrics (with cache - now properly keyed by sprint_id)
     metrics = await get_metrics_with_cache(
         user=current_user,
         project_key=jira_project_key,

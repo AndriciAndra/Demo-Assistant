@@ -47,26 +47,22 @@ class MongoStorageService:
             return
 
         try:
-            # Force TLS 1.2 to fix SSL handshake issues
+            # Build connection options for MongoDB Atlas
+            connection_options = {
+                "serverSelectionTimeoutMS": 30000,
+                "connectTimeoutMS": 30000,
+                "socketTimeoutMS": 30000,
+                "retryWrites": True,
+                "w": "majority"
+            }
+
+            # Try with certifi first (best option)
             if CERTIFI_AVAILABLE:
-                self._client = MongoClient(
-                    settings.mongodb_url,
-                    tls=True,
-                    tlsCAFile=certifi.where(),
-                    tlsAllowInvalidCertificates=False,
-                    serverSelectionTimeoutMS=30000,
-                    connectTimeoutMS=30000
-                )
-                logger.info("Using certifi for SSL certificates with TLS")
-            else:
-                self._client = MongoClient(
-                    settings.mongodb_url,
-                    tls=True,
-                    tlsAllowInvalidCertificates=True,
-                    serverSelectionTimeoutMS=30000,
-                    connectTimeoutMS=30000
-                )
-                logger.warning("⚠️ certifi not installed, using insecure SSL connection")
+                connection_options["tlsCAFile"] = certifi.where()
+                logger.info("Using certifi for SSL certificates")
+
+            # Create client
+            self._client = MongoClient(settings.mongodb_url, **connection_options)
 
             self._db = self._client.demo_assistant  # Database name
             self._fs = GridFS(self._db)
@@ -78,7 +74,23 @@ class MongoStorageService:
 
         except Exception as e:
             logger.error(f"❌ MongoDB connection error: {e}")
-            raise
+            # Try fallback without strict SSL
+            try:
+                logger.info("Trying fallback connection without strict SSL...")
+                self._client = MongoClient(
+                    settings.mongodb_url,
+                    tlsAllowInvalidCertificates=True,
+                    serverSelectionTimeoutMS=30000,
+                    connectTimeoutMS=30000
+                )
+                self._db = self._client.demo_assistant
+                self._fs = GridFS(self._db)
+                self._client.admin.command('ping')
+                logger.info("✅ MongoDB connected with fallback SSL settings")
+                self._initialized = True
+            except Exception as e2:
+                logger.error(f"❌ MongoDB fallback also failed: {e2}")
+                raise
 
     async def upload_file(
             self,
@@ -285,21 +297,25 @@ class MongoStorageService:
             data: dict,
             date_range_start: datetime = None,
             date_range_end: datetime = None,
-            sprint_id: str = None
+            sprint_id: str = None,
+            sprint_name: str = None,
+            sprint_start_date: datetime = None,
+            sprint_end_date: datetime = None
     ) -> str:
         """
         Save scraped Jira data to cache.
-        Replaces existing cache for same user+project.
+        Replaces existing cache for same user+project+sprint.
 
         Returns: document ID
         """
         try:
             collection = self._db.scraped_data
 
-            # Upsert - replace if exists
+            # Upsert - replace if exists for same user+project+sprint
             filter_query = {
                 "user_id": user_id,
-                "jira_project_key": project_key
+                "jira_project_key": project_key,
+                "sprint_id": sprint_id  # Include sprint_id in filter!
             }
 
             document = {
@@ -309,13 +325,16 @@ class MongoStorageService:
                 "scraped_at": datetime.utcnow(),
                 "date_range_start": date_range_start,
                 "date_range_end": date_range_end,
-                "sprint_id": sprint_id
+                "sprint_id": sprint_id,
+                "sprint_name": sprint_name,
+                "sprint_start_date": sprint_start_date,
+                "sprint_end_date": sprint_end_date
             }
 
             result = collection.replace_one(filter_query, document, upsert=True)
 
             doc_id = str(result.upserted_id) if result.upserted_id else "updated"
-            logger.info(f"Cached data for user {user_id}, project {project_key}")
+            logger.info(f"Cached data for user {user_id}, project {project_key}, sprint {sprint_id}")
             return doc_id
 
         except Exception as e:
@@ -326,22 +345,35 @@ class MongoStorageService:
             self,
             user_id: int,
             project_key: str,
+            sprint_id: str = None,
             max_age_hours: int = 24
     ) -> Optional[dict]:
         """
         Get cached Jira data if exists and not expired.
+
+        Args:
+            user_id: User ID
+            project_key: Jira project key
+            sprint_id: Optional sprint ID to filter by
+            max_age_hours: Maximum cache age in hours
 
         Returns: cached data dict or None if not found/expired
         """
         try:
             collection = self._db.scraped_data
 
-            cached = collection.find_one({
+            # Build query - include sprint_id if provided
+            query = {
                 "user_id": user_id,
                 "jira_project_key": project_key
-            })
+            }
+            if sprint_id:
+                query["sprint_id"] = sprint_id
+
+            cached = collection.find_one(query)
 
             if not cached:
+                logger.info(f"No cache found for project {project_key}, sprint {sprint_id}")
                 return None
 
             # Check age
@@ -350,15 +382,57 @@ class MongoStorageService:
                 from datetime import timedelta
                 age = datetime.utcnow() - scraped_at
                 if age > timedelta(hours=max_age_hours):
-                    logger.info(f"Cache for {project_key} expired ({age.total_seconds() / 3600:.1f}h old)")
+                    logger.info(
+                        f"Cache for {project_key} sprint {sprint_id} expired ({age.total_seconds() / 3600:.1f}h old)")
                     return None
 
-            logger.info(f"Using cached data for {project_key}")
+            logger.info(f"Using cached data for {project_key}, sprint {sprint_id}")
             return cached.get("data")
 
         except Exception as e:
             logger.error(f"Failed to get cached data: {e}")
             return None
+
+    async def get_all_sprint_caches(
+            self,
+            user_id: int,
+            project_key: str,
+            max_age_hours: int = 168
+    ) -> list:
+        """
+        Get all cached sprint data for a project.
+        Used when querying by date range to combine multiple sprint caches.
+
+        Returns: list of cache documents with sprint data
+        """
+        try:
+            collection = self._db.scraped_data
+
+            # Find all caches for this user+project that have sprint_id
+            caches = list(collection.find({
+                "user_id": user_id,
+                "jira_project_key": project_key,
+                "sprint_id": {"$ne": None}
+            }))
+
+            # Filter out expired caches
+            valid_caches = []
+            for cache in caches:
+                scraped_at = cache.get("scraped_at")
+                if scraped_at:
+                    from datetime import timedelta
+                    age = datetime.utcnow() - scraped_at
+                    if age <= timedelta(hours=max_age_hours):
+                        valid_caches.append(cache)
+                else:
+                    valid_caches.append(cache)
+
+            logger.info(f"Found {len(valid_caches)} valid sprint caches for {project_key}")
+            return valid_caches
+
+        except Exception as e:
+            logger.error(f"Failed to get sprint caches: {e}")
+            return []
 
     async def get_all_cached_data(self, user_id: int) -> list:
         """Get all cached data for a user."""

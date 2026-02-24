@@ -1,13 +1,17 @@
+"""
+Self Review API routes.
+Uses MongoDB GridFS for PDF storage.
+"""
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from datetime import datetime
 from app.database import get_db
 from app.models import (
     User, GeneratedFile,
-    SelfReviewGenerateRequest, SelfReviewGenerateResponse,
-    SelfReviewRecommendRequest, SelfReviewRecommendResponse
+    SelfReviewGenerateRequest, SelfReviewRecommendRequest,
+    SelfReviewRecommendResponse, SelfReviewGenerateResponse
 )
-from app.services import JiraClient, GeminiService, PDFService
+from app.services import GeminiService, PDFService
 from app.services.mongo_storage import get_mongo_storage
 from app.api.deps import get_current_user
 from app.api.routes.jira import get_jira_client
@@ -20,20 +24,17 @@ router = APIRouter(prefix="/self-review", tags=["self-review"])
 
 def serialize_for_json(obj):
     """Recursively convert datetime objects to ISO strings for JSON serialization."""
-    if isinstance(obj, dict):
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
         return {k: serialize_for_json(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [serialize_for_json(item) for item in obj]
-    elif isinstance(obj, datetime):
-        return obj.isoformat()
-    else:
-        return obj
+    return obj
 
 
 def calculate_cache_expiry_hours(user: User) -> int:
-    """
-    Calculate cache expiry based on user's scheduler settings.
-    """
+    """Calculate cache expiry based on user's scheduler settings."""
     if not user.scheduler_enabled:
         return 168  # 7 days default
 
@@ -62,16 +63,13 @@ def calculate_cache_expiry_hours(user: User) -> int:
 async def get_metrics_with_cache(
         user: User,
         project_key: str,
-        jira_client: JiraClient,
+        jira_client,
         start_date: datetime,
         end_date: datetime
 ) -> dict:
-    """
-    Get metrics from cache if available, otherwise fetch from Jira.
-    """
+    """Get metrics from cache if available, otherwise fetch from Jira."""
     mongo_storage = get_mongo_storage()
 
-    # Calculate cache expiry based on user's scheduler settings
     max_cache_age_hours = calculate_cache_expiry_hours(user)
     logger.info(f"Cache expiry for user {user.id}: {max_cache_age_hours} hours")
 
@@ -160,7 +158,6 @@ async def generate_self_review(
     # Get template
     template = request.template
     if request.template_id:
-        # Load template from database
         from app.models.database import Template
         db_template = db.query(Template).filter(
             Template.id == request.template_id
@@ -168,9 +165,10 @@ async def generate_self_review(
         if db_template:
             template = db_template.content
 
-    # Generate content with Gemini
+    # Generate content with Gemini (with user_name for personalization)
     gemini = GeminiService()
-    content = await gemini.generate_self_review(metrics, template)
+    user_name = current_user.name or current_user.email.split('@')[0]
+    content = await gemini.generate_self_review(metrics, user_name=user_name, template=template)
 
     # Generate PDF
     pdf_service = PDFService()
@@ -182,7 +180,7 @@ async def generate_self_review(
         date_range_end=request.date_range.end
     )
 
-    # Upload to MongoDB Atlas (replaces Firebase)
+    # Upload to MongoDB Atlas
     filename = f"self_review_{request.jira_project_key}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
 
     mongo_storage = get_mongo_storage()
@@ -215,7 +213,6 @@ async def generate_self_review(
             # Refresh if needed
             if google_auth.is_token_expired(current_user.google_token_expiry):
                 credentials = await google_auth.refresh_credentials(credentials)
-                # Update tokens in database
                 current_user.google_access_token = credentials.token
                 if credentials.expiry:
                     current_user.google_token_expiry = credentials.expiry
@@ -224,7 +221,7 @@ async def generate_self_review(
             # Upload to Drive
             drive_service = DriveService(credentials)
 
-            # Get or create app folder (inside user's folder if specified)
+            # Get or create app folder
             app_folder_id = await drive_service.get_or_create_app_folder(
                 base_folder_id=current_user.drive_folder_id
             )
@@ -242,7 +239,6 @@ async def generate_self_review(
 
         except Exception as e:
             logger.error(f"Failed to sync to Google Drive: {e}")
-            # Don't fail the whole request if Drive sync fails
 
     # Serialize metrics for JSON storage
     serialized_metrics = serialize_for_json(metrics)
@@ -252,8 +248,8 @@ async def generate_self_review(
         user_id=current_user.id,
         file_type="self_review",
         filename=filename,
-        mongo_file_id=mongo_file_id,  # MongoDB GridFS ObjectId
-        drive_file_id=drive_file_id,  # Google Drive file ID
+        mongo_file_id=mongo_file_id,
+        drive_file_id=drive_file_id,
         drive_url=drive_url,
         date_range_start=request.date_range.start,
         date_range_end=request.date_range.end,
@@ -284,7 +280,6 @@ async def get_self_review_history(
         GeneratedFile.file_type == "self_review"
     ).order_by(GeneratedFile.created_at.desc()).limit(limit).all()
 
-    # Convert mongo_file_id to download URL
     result = []
     for f in files:
         file_dict = {
@@ -344,7 +339,6 @@ async def delete_self_review(
             logger.info(f"Deleted file from Drive: {file.drive_file_id}")
         except Exception as e:
             logger.error(f"Failed to delete from Drive: {e}")
-            # Continue with deletion even if Drive delete fails
 
     db.delete(file)
     db.commit()

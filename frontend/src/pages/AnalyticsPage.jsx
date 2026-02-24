@@ -26,6 +26,8 @@ import {
   Award,
   Activity,
   BarChart3,
+  Flame,
+  Timer,
 } from 'lucide-react';
 import { Card, Button, Dropdown, Alert } from '../components/common';
 import { jiraService, analyticsService } from '../services';
@@ -42,7 +44,19 @@ const COLORS = {
   teal: '#14b8a6',
 };
 
-const PIE_COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#3b82f6'];
+const PIE_COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#6366f1'];
+
+// Status colors for pie chart
+const STATUS_COLORS = {
+  'Done': '#10b981',
+  'Closed': '#10b981',
+  'Resolved': '#10b981',
+  'In Progress': '#3b82f6',
+  'In Review': '#8b5cf6',
+  'To Do': '#9ca3af',
+  'Open': '#9ca3af',
+  'Blocked': '#ef4444',
+};
 
 // Custom tooltip for charts
 const CustomTooltip = ({ active, payload, label }) => {
@@ -69,7 +83,7 @@ function StatCard({ icon: Icon, label, value, subValue, trend, color }) {
         <div className={`p-2 rounded-lg ${color}`}>
           <Icon size={20} className="text-white" />
         </div>
-        {trend && (
+        {trend !== null && trend !== undefined && (
           <span
             className={`text-sm font-medium ${
               trend > 0 ? 'text-green-600' : trend < 0 ? 'text-red-600' : 'text-gray-500'
@@ -152,26 +166,20 @@ export default function AnalyticsPage() {
     completed: s.metrics.completed_issues,
   })) || [];
 
-  const issuesByTypeData = sprintData?.sprints?.length > 0
+  // Issues by Status (NEW - replaces Issues by Type)
+  const issuesByStatusData = sprintData?.sprints?.length > 0
     ? Object.entries(
         sprintData.sprints.reduce((acc, sprint) => {
-          Object.entries(sprint.by_type || {}).forEach(([type, count]) => {
-            acc[type] = (acc[type] || 0) + count;
+          Object.entries(sprint.by_status || {}).forEach(([status, count]) => {
+            acc[status] = (acc[status] || 0) + count;
           });
           return acc;
         }, {})
-      ).map(([name, value]) => ({ name, value }))
-    : [];
-
-  const issuesByPriorityData = sprintData?.sprints?.length > 0
-    ? Object.entries(
-        sprintData.sprints.reduce((acc, sprint) => {
-          Object.entries(sprint.by_priority || {}).forEach(([priority, count]) => {
-            acc[priority] = (acc[priority] || 0) + count;
-          });
-          return acc;
-        }, {})
-      ).map(([name, value]) => ({ name, value }))
+      ).map(([name, value]) => ({ 
+        name, 
+        value,
+        color: STATUS_COLORS[name] || '#9ca3af'
+      }))
     : [];
 
   const sprintComparisonData = sprintData?.sprints?.map((s) => ({
@@ -248,13 +256,13 @@ export default function AnalyticsPage() {
       ) : sprintData ? (
         <>
           {/* Summary Stats */}
-          <div className="grid grid-cols-4 gap-4 mb-8">
+          <div className="grid grid-cols-5 gap-4 mb-8">
             <StatCard
               icon={Zap}
               label="Avg Velocity"
               value={sprintData.summary.avg_velocity}
               subValue="story points/sprint"
-              trend={calculateTrend('velocity')}
+              // trend={calculateTrend('velocity')}
               color="bg-indigo-500"
             />
             <StatCard
@@ -262,26 +270,33 @@ export default function AnalyticsPage() {
               label="Avg Completion"
               value={`${sprintData.summary.avg_completion_rate}%`}
               subValue="issues completed"
-              trend={calculateTrend('completion_rate')}
+              // trend={calculateTrend('completion_rate')}
               color="bg-green-500"
             />
             <StatCard
-              icon={CheckCircle}
-              label="Total Issues"
-              value={sprintData.summary.total_issues_all_sprints}
-              subValue={`across ${sprintData.summary.total_sprints} sprints`}
+              icon={Timer}
+              label="Avg Time to Complete"
+              value={`${sprintData.summary.avg_time_to_complete_days || 0}d`}
+              subValue="days per issue"
               color="bg-blue-500"
+            />
+            <StatCard
+              icon={Flame}
+              label="Current Streak"
+              value={`${sprintData.summary.current_streak || 0} days`}
+              subValue="consecutive completions"
+              color="bg-orange-500"
             />
             <StatCard
               icon={Award}
               label="Total Points"
               value={sprintData.summary.total_points_all_sprints}
-              subValue="story points delivered"
+              subValue={`across ${sprintData.summary.total_sprints} sprints`}
               color="bg-purple-500"
             />
           </div>
 
-          {/* Current Sprint Banner */}
+          {/* Current Sprint Banner - FIXED */}
           {currentSprint?.sprint && (
             <Card className="p-6 mb-8 bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
               <div className="flex items-center justify-between">
@@ -293,12 +308,14 @@ export default function AnalyticsPage() {
                   )}
                 </div>
                 <div className="text-right">
-                  <div className="text-4xl font-bold">{currentSprint.my_stats.progress_percent}%</div>
-                  <p className="text-sm opacity-80">
-                    {currentSprint.my_stats.completed_points} / {currentSprint.my_stats.total_points} pts
+                  <div className="text-4xl font-bold">
+                    {currentSprint.my_stats?.completion_rate || 0}%
+                  </div>
+                  <p className="text-sm opacity-80 mt-1">
+                    {currentSprint.my_stats?.completed_story_points || 0} / {currentSprint.my_stats?.total_story_points || 0} pts
                   </p>
                   <p className="text-sm opacity-80">
-                    {currentSprint.my_stats.completed_issues} / {currentSprint.my_stats.total_issues} issues
+                    {currentSprint.my_stats?.completed_issues || 0} / {currentSprint.my_stats?.total_issues || 0} issues
                   </p>
                 </div>
               </div>
@@ -306,7 +323,7 @@ export default function AnalyticsPage() {
               <div className="mt-4 bg-white/20 rounded-full h-3">
                 <div
                   className="bg-white rounded-full h-3 transition-all"
-                  style={{ width: `${currentSprint.my_stats.progress_percent}%` }}
+                  style={{ width: `${currentSprint.my_stats?.completion_rate || 0}%` }}
                 />
               </div>
             </Card>
@@ -370,14 +387,14 @@ export default function AnalyticsPage() {
           </div>
 
           {/* Charts Row 2 - Distribution */}
-          <div className="grid grid-cols-3 gap-6 mb-8">
-            {/* Issues by Type */}
+          <div className="grid grid-cols-2 gap-6 mb-8">
+            {/* Issues by Status (NEW - replaces Issues by Type) */}
             <Card className="p-6">
-              <h3 className="font-semibold text-gray-700 mb-4">Issues by Type</h3>
+              <h3 className="font-semibold text-gray-700 mb-4">Issues by Status</h3>
               <ResponsiveContainer width="100%" height={220}>
                 <PieChart>
                   <Pie
-                    data={issuesByTypeData}
+                    data={issuesByStatusData}
                     cx="50%"
                     cy="50%"
                     innerRadius={50}
@@ -387,26 +404,12 @@ export default function AnalyticsPage() {
                     label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
                     labelLine={false}
                   >
-                    {issuesByTypeData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                    {issuesByStatusData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
                   <Tooltip />
                 </PieChart>
-              </ResponsiveContainer>
-            </Card>
-
-            {/* Issues by Priority */}
-            <Card className="p-6">
-              <h3 className="font-semibold text-gray-700 mb-4">Issues by Priority</h3>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={issuesByPriorityData} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis type="number" tick={{ fontSize: 12 }} />
-                  <YAxis dataKey="name" type="category" tick={{ fontSize: 12 }} width={80} />
-                  <Tooltip />
-                  <Bar dataKey="value" fill={COLORS.info} radius={[0, 4, 4, 0]} name="Issues" />
-                </BarChart>
               </ResponsiveContainer>
             </Card>
 
@@ -433,7 +436,7 @@ export default function AnalyticsPage() {
               <BarChart3 size={18} className="text-gray-500" />
               Recent Sprint Issues
             </h3>
-            {sprintData.sprints.length > 0 && sprintData.sprints[sprintData.sprints.length - 1].issues.length > 0 ? (
+            {currentSprint?.issues?.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
@@ -446,7 +449,7 @@ export default function AnalyticsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {sprintData.sprints[sprintData.sprints.length - 1].issues.slice(0, 10).map((issue) => (
+                    {currentSprint.issues.slice(0, 10).map((issue) => (
                       <tr key={issue.key} className="border-b border-gray-50 hover:bg-gray-50">
                         <td className="py-3 px-4">
                           <span className="text-indigo-600 font-medium">{issue.key}</span>
@@ -477,7 +480,7 @@ export default function AnalyticsPage() {
                 </table>
               </div>
             ) : (
-              <p className="text-gray-400 text-center py-8">No issues found in the selected sprints</p>
+              <p className="text-gray-400 text-center py-8">No issues found in the current sprint</p>
             )}
           </Card>
         </>
