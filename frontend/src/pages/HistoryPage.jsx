@@ -67,20 +67,29 @@ export default function HistoryPage() {
     return item.download_url || item.firebase_url;
   };
 
-  // Format datetime without timezone conversion
+  // Format datetime converting UTC to local timezone
   const formatDateTime = (dateString) => {
     if (!dateString) return '';
     try {
-      // Parse ISO string: "2026-02-24T17:48:30.123456"
-      const match = dateString.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-      if (match) {
-        const [, year, month, day, hour, minute] = match;
-        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
-                       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        const monthName = months[parseInt(month, 10) - 1];
-        return `${monthName} ${parseInt(day, 10)}, ${year} ${hour}:${minute}`;
+      // Parse the ISO string as UTC and convert to local time
+      const date = new Date(dateString);
+      
+      // Check if valid date
+      if (isNaN(date.getTime())) {
+        return dateString;
       }
-      return dateString;
+      
+      // Format using local timezone
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      
+      const day = date.getDate();
+      const month = months[date.getMonth()];
+      const year = date.getFullYear();
+      const hours = date.getHours().toString().padStart(2, '0');
+      const minutes = date.getMinutes().toString().padStart(2, '0');
+      
+      return `${month} ${day}, ${year} ${hours}:${minutes}`;
     } catch {
       return dateString;
     }
