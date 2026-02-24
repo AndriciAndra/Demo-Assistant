@@ -174,13 +174,13 @@ export default function ReviewPage() {
           placeholder={`Enter your template or let AI recommend one based on your work data...
 
 Example:
-## Accomplishments
+Accomplishments
 [DESCRIBE_KEY_ACCOMPLISHMENTS]
 
-## Challenges
+Challenges
 [DESCRIBE_CHALLENGES_OVERCOME]
 
-## Areas for Growth
+Areas for Growth
 [DESCRIBE_GROWTH_AREAS]`}
           className="w-full h-48 px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg resize-none outline-none focus:border-indigo-300 text-gray-700 placeholder:text-gray-400"
         />
