@@ -400,15 +400,16 @@ async def generate_demo(
     date_format = "%d%b%Y"
     start_str = start_date.strftime(date_format)
     end_str = end_date.strftime(date_format)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    now = datetime.now()
+    timestamp = now.strftime('%Y%m%d_%H%M%S')
     
     if sprint_name:
         # Sanitize sprint name for filename (remove special characters)
         safe_sprint_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in sprint_name)
         safe_sprint_name = safe_sprint_name.replace(' ', '_')
-        filename = f"demo_{safe_sprint_name}_{request.jira_project_key}_{timestamp}.pptx"
+        filename = f"demo_{request.jira_project_key}_{safe_sprint_name}.pptx"
     else:
-        filename = f"demo_{request.jira_project_key}_{start_str}-{end_str}_{timestamp}.pptx"
+        filename = f"demo_{request.jira_project_key}_range_{start_str}-{end_str}.pptx"
 
     # Save to database
     serialized_metrics = serialize_for_json(metrics)
@@ -420,7 +421,8 @@ async def generate_demo(
         date_range_end=end_date,
         jira_project_key=request.jira_project_key,
         metrics=serialized_metrics,
-        google_slides_id=google_slides_id
+        google_slides_id=google_slides_id,
+        created_at=now
     )
     db.add(generated_file)
     db.commit()

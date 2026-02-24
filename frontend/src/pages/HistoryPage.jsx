@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { Play, FileText, Eye, Download, Link, Trash2 } from 'lucide-react';
 import { Card, Button, Alert } from '../components/common';
 import { demoService, reviewService } from '../services';
-import { format } from 'date-fns';
 
 export default function HistoryPage() {
   const [activeFilter, setActiveFilter] = useState('all');
@@ -26,7 +25,7 @@ export default function HistoryPage() {
       const combined = [
         ...demos.map((d) => ({ ...d, type: 'demo' })),
         ...reviews.map((r) => ({ ...r, type: 'self_review' })),
-      ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      ].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
 
       setHistory(combined);
     } catch (err) {
@@ -64,9 +63,27 @@ export default function HistoryPage() {
     { key: 'reviews', label: 'Self Reviews' },
   ];
 
-  // Get download URL - handles both old firebase_url and new download_url
   const getDownloadUrl = (item) => {
     return item.download_url || item.firebase_url;
+  };
+
+  // Format datetime without timezone conversion
+  const formatDateTime = (dateString) => {
+    if (!dateString) return '';
+    try {
+      // Parse ISO string: "2026-02-24T17:48:30.123456"
+      const match = dateString.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+      if (match) {
+        const [, year, month, day, hour, minute] = match;
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const monthName = months[parseInt(month, 10) - 1];
+        return `${monthName} ${parseInt(day, 10)}, ${year} ${hour}:${minute}`;
+      }
+      return dateString;
+    } catch {
+      return dateString;
+    }
   };
 
   return (
@@ -83,7 +100,6 @@ export default function HistoryPage() {
       )}
 
       <Card className="overflow-hidden">
-        {/* Filters */}
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
           <div className="flex gap-2">
             {filters.map((filter) => (
@@ -105,7 +121,6 @@ export default function HistoryPage() {
           </Button>
         </div>
 
-        {/* List */}
         {isLoading ? (
           <div className="p-12 text-center">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto"></div>
@@ -138,7 +153,7 @@ export default function HistoryPage() {
                     <p className="font-medium text-gray-700">{item.filename}</p>
                     <p className="text-sm text-gray-400">
                       {item.jira_project_key} •{' '}
-                      {format(new Date(item.created_at), 'MMM d, yyyy')}
+                      {formatDateTime(item.created_at)}
                     </p>
                   </div>
                 </div>

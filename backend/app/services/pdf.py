@@ -165,6 +165,7 @@ class PDFService:
 
         Recognizes:
         - ## Header or ### Header -> header
+        - ALL CAPS LINE (e.g., "SUMMARY", "KEY CONTRIBUTIONS") -> header
         - **SECTION TITLE** at start of line -> header
         - Lines starting with - or * or • -> bullet
         - Everything else -> body (preserves <b> tags for inline bold)
@@ -188,10 +189,18 @@ class PDFService:
                 if current_para:
                     paragraphs.append(('body', ' '.join(current_para)))
                     current_para = []
-                # Remove ## and any remaining markdown
                 header_text = re.sub(r'^#{1,6}\s*', '', stripped)
-                header_text = re.sub(r'\*\*(.+?)\*\*', r'\1', header_text)  # Remove ** if present
+                header_text = re.sub(r'\*\*(.+?)\*\*', r'\1', header_text)
                 paragraphs.append(('header', header_text))
+                continue
+
+            # Check for ALL CAPS section title (at least 2 words or known sections)
+            # Match lines that are ALL CAPS, may contain & and spaces
+            if re.match(r'^[A-Z][A-Z\s&]+$', stripped) and len(stripped) >= 5:
+                if current_para:
+                    paragraphs.append(('body', ' '.join(current_para)))
+                    current_para = []
+                paragraphs.append(('header', stripped.title()))  # Convert to Title Case
                 continue
 
             # Check for bold section title at start of line: **TITLE** or <b>TITLE</b>
@@ -203,7 +212,7 @@ class PDFService:
                 if current_para:
                     paragraphs.append(('body', ' '.join(current_para)))
                     current_para = []
-                paragraphs.append(('header', bold_match.group(1)))
+                paragraphs.append(('header', bold_match.group(1).title()))
                 continue
 
             # Check for bullet points
@@ -212,7 +221,6 @@ class PDFService:
                     paragraphs.append(('body', ' '.join(current_para)))
                     current_para = []
                 bullet_text = stripped[2:].strip()
-                # Convert any remaining markdown bold to HTML
                 bullet_text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', bullet_text)
                 paragraphs.append(('bullet', bullet_text))
                 continue

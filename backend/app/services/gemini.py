@@ -286,19 +286,25 @@ You are helping {user_name or 'a software professional'} write their self-review
 
 === CRITICAL INSTRUCTIONS ===
 
-1. NEVER mention specific ticket numbers, issue keys, or task IDs
-2. NEVER list individual tasks or say "For example, I worked on [specific ticket]"
-3. DO write in flowing, professional prose
-4. DO focus on THEMES, PATTERNS, and OVERALL IMPACT of the work
-5. DO highlight skills demonstrated: problem-solving, technical expertise, collaboration
-6. DO quantify impact where meaningful (e.g., "improved system reliability", "streamlined processes")
-7. DO write confidently in first person ("I delivered", "I contributed", "I drove")
+1. Follow the template structure above - keep the same sections
+2. Replace any [placeholder] text with real content based on the work data
+3. Section titles should be in ALL CAPS on their own line
+4. Write in flowing, professional prose paragraphs
+5. NEVER mention specific ticket numbers, issue keys, or task IDs
+6. NEVER list individual tasks - focus on THEMES and IMPACT
+7. Write confidently in first person ("I delivered", "I contributed")
 
-For bugs fixed → write about "improving system stability" or "enhancing user experience"
+For bugs fixed → write about "improving system stability" or "enhancing reliability"
 For features → write about "delivering new capabilities" or "enabling users to..."
-For tasks → write about "supporting team objectives" or "driving operational improvements"
+For tasks → write about "supporting team objectives" or "driving improvements"
 
-The review should read like a polished professional document, NOT a task list.
+FORMATTING:
+- Section titles: ALL CAPS on their own line
+- Important phrases can use **bold** markers
+- Write prose paragraphs, avoid bullet points
+- NO markdown headers like ## or ###
+
+The review should read like a polished professional document.
 """
         else:
             prompt = f"""
@@ -321,34 +327,30 @@ ABSOLUTE RULES:
 
 === STRUCTURE ===
 
-**SUMMARY**
+SUMMARY
 A powerful 2-3 sentence opening that captures overall impact and value delivered during this period. Set the tone for a strong review.
 
-**KEY CONTRIBUTIONS**
-Write 2-3 paragraphs describing the THEMES of your work and their impact. Group related work conceptually:
-- If you built features → describe the capabilities delivered and who benefits
-- If you fixed bugs → describe how you improved reliability/quality/user experience
-- If you completed tasks → describe how you supported team and business objectives
+KEY CONTRIBUTIONS
+Write 2-3 paragraphs describing the THEMES of your work and their impact. Group related work conceptually. Focus on the "so what" - why did this work matter?
 
-Focus on the "so what" - why did this work matter?
+TECHNICAL EXCELLENCE
+A paragraph highlighting technical skills demonstrated through your work. Mention problem-solving approaches, technical domains you contributed to, and quality in your work.
 
-**TECHNICAL EXCELLENCE**
-A paragraph highlighting technical skills demonstrated through your work. Mention areas like problem-solving approaches, technical domains you contributed to, and quality in your work.
-
-**COLLABORATION & IMPACT**
+COLLABORATION & IMPACT
 A paragraph on how you worked with others and your broader impact, including cross-functional collaboration, knowledge sharing, and supporting team success.
 
-**GROWTH & DEVELOPMENT**
+GROWTH & DEVELOPMENT
 A paragraph reflecting on skills developed and areas of professional growth during this period.
 
-**LOOKING AHEAD**
+LOOKING AHEAD
 A brief forward-looking paragraph on goals and focus areas for the next period.
 
 === FORMATTING ===
-- Use **bold** for section titles and key phrases you want to emphasize
+- Section titles: ALL CAPS on their own line (exactly as shown above)
+- Use **bold** for key phrases you want to emphasize
 - Write in flowing prose paragraphs
 - NO bullet points for listing work items
-- NO ticket references or task IDs
+- NO markdown headers like ## or ###
 
 === TONE ===
 - Confident but not arrogant
@@ -368,31 +370,47 @@ A brief forward-looking paragraph on goals and focus areas for the next period.
         total = metrics.get('total_issues', 0)
 
         # Determine work focus
-        has_bugs = by_type.get('Bug', 0) > 0
-        has_features = by_type.get('Story', 0) > 0 or by_type.get('Feature', 0) > 0
+        bugs = by_type.get('Bug', 0)
+        features = by_type.get('Story', 0) + by_type.get('Feature', 0)
+        tasks = by_type.get('Task', 0)
 
         prompt = f"""
 Based on this work profile, create a self-review template:
 
-Work types: {by_type}
-Total items: {total}
+Work breakdown:
+- Features/Stories: {features}
+- Tasks: {tasks}
+- Bugs fixed: {bugs}
+- Total items: {total}
 
-Create a template with sections and placeholder prompts like [Describe...] that fit this work profile.
+Create a template with 4-6 sections that fit this work profile.
 
-For example, if someone fixed many bugs, include a "System Reliability" section.
-If someone built features, include "Feature Delivery" section.
+IMPORTANT FORMATTING RULES:
+- Section titles should be in ALL CAPS on their own line (e.g., "SUMMARY", "KEY ACCOMPLISHMENTS")
+- Do NOT use markdown formatting like ## or ** or *
+- Use [placeholder text] for content that should be filled in
+- Keep it simple and clean
 
-The template should:
-1. Have 4-6 sections
-2. Include guiding prompts in [brackets] for each section
-3. Focus on IMPACT, not metrics
-4. Be professional but allow personality
+Example format:
+SUMMARY
+[Describe your overall impact and value delivered]
 
-Return ONLY the template text, ready to be filled in.
+KEY ACCOMPLISHMENTS
+[Describe main achievements and their business impact]
+
+For someone who fixed many bugs, include a "SYSTEM RELIABILITY" or "QUALITY IMPROVEMENTS" section.
+For someone who built features, include "FEATURE DELIVERY" or "PRODUCT CONTRIBUTIONS" section.
+For someone with many tasks, include "OPERATIONAL EXCELLENCE" or "PROJECT SUPPORT" section.
+
+Return ONLY the template text, ready to be filled in. No explanations, no markdown.
 """
 
         response = await self.model.generate_content_async(prompt)
-        return response.text
+        # Clean any markdown that slipped through
+        text = response.text
+        text = text.replace('## ', '').replace('### ', '')
+        text = text.replace('**', '').replace('*', '')
+        return text.strip()
 
     def _format_issues_detailed(self, issues: list) -> str:
         """Format issues with full details for AI context."""

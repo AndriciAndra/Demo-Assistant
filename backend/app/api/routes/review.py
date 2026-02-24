@@ -266,8 +266,9 @@ async def generate_self_review(
     date_format = "%d%b%Y"
     start_str = request.date_range.start.strftime(date_format)
     end_str = request.date_range.end.strftime(date_format)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f"self_review_{request.jira_project_key}_{start_str}-{end_str}_{timestamp}.pdf"
+    now = datetime.now()
+    timestamp = now.strftime('%Y%m%d_%H%M%S')
+    filename = f"self_review_{request.jira_project_key}_range_{start_str}-{end_str}.pdf"
 
     mongo_storage = get_mongo_storage()
     mongo_file_id = await mongo_storage.upload_pdf(
@@ -340,7 +341,8 @@ async def generate_self_review(
         date_range_start=request.date_range.start,
         date_range_end=request.date_range.end,
         jira_project_key=request.jira_project_key,
-        metrics=serialized_metrics
+        metrics=serialized_metrics,
+        created_at=now
     )
     db.add(generated_file)
     db.commit()
