@@ -400,16 +400,16 @@ async def generate_demo(
     date_format = "%d%b%Y"
     start_str = start_date.strftime(date_format)
     end_str = end_date.strftime(date_format)
-    now = datetime.now()
+    now = datetime.utcnow()
     timestamp = now.strftime('%Y%m%d_%H%M%S')
     
     if sprint_name:
         # Sanitize sprint name for filename (remove special characters)
         safe_sprint_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in sprint_name)
         safe_sprint_name = safe_sprint_name.replace(' ', '_')
-        filename = f"demo_{request.jira_project_key}_{safe_sprint_name}.pptx"
+        filename = f"demo_{request.jira_project_key}_{safe_sprint_name}_{timestamp}.pptx"
     else:
-        filename = f"demo_{request.jira_project_key}_range_{start_str}-{end_str}.pptx"
+        filename = f"demo_{request.jira_project_key}_range_{start_str}-{end_str}_{timestamp}.pptx"
 
     # Save to database
     serialized_metrics = serialize_for_json(metrics)

@@ -266,9 +266,9 @@ async def generate_self_review(
     date_format = "%d%b%Y"
     start_str = request.date_range.start.strftime(date_format)
     end_str = request.date_range.end.strftime(date_format)
-    now = datetime.now()
+    now = datetime.utcnow()
     timestamp = now.strftime('%Y%m%d_%H%M%S')
-    filename = f"self_review_{request.jira_project_key}_range_{start_str}-{end_str}.pdf"
+    filename = f"self_review_{request.jira_project_key}_range_{start_str}-{end_str}_{timestamp}.pdf"
 
     mongo_storage = get_mongo_storage()
     mongo_file_id = await mongo_storage.upload_pdf(
