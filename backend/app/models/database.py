@@ -63,7 +63,7 @@ class GeneratedFile(Base):
     # Metrics snapshot (stored as JSON)
     metrics = Column(JSON, nullable=True)
 
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime)
 
 
 class Template(Base):
