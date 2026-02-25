@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Play, FileText, Eye, Download, Link, Trash2 } from 'lucide-react';
 import { Card, Button, Alert } from '../components/common';
 import { demoService, reviewService } from '../services';
+import api from '../services/api';
 
 export default function HistoryPage() {
   const [activeFilter, setActiveFilter] = useState('all');
@@ -64,7 +65,45 @@ export default function HistoryPage() {
   ];
 
   const getDownloadUrl = (item) => {
-    return item.download_url || item.firebase_url;
+    const path = item.download_url || item.firebase_url;
+    if (!path) return null;
+    
+    // If it's already a full URL (drive, firebase, etc.), return as-is
+    if (path.startsWith('http')) return path;
+    
+    // For relative API paths, return the path (will be handled by handleDownload)
+    return path;
+  };
+
+  const handleDownload = async (item) => {
+    const path = item.download_url || item.firebase_url;
+    if (!path) return;
+    
+    // If it's a full URL, just open it
+    if (path.startsWith('http')) {
+      window.open(path, '_blank');
+      return;
+    }
+    
+    // For API paths, download via axios
+    try {
+      const response = await api.get(path, {
+        responseType: 'blob'
+      });
+      
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', item.filename || 'download.pdf');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Download failed:', err);
+      setError('Failed to download file');
+    }
   };
 
   // Format datetime converting UTC to local timezone
@@ -179,15 +218,13 @@ export default function HistoryPage() {
                     </a>
                   )}
                   {getDownloadUrl(item) && (
-                    <a
-                      href={getDownloadUrl(item)}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <button
+                      onClick={() => handleDownload(item)}
                       className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                       title="Download"
                     >
                       <Download size={18} className="text-gray-400" />
-                    </a>
+                    </button>
                   )}
                   {item.drive_url && (
                     <a
