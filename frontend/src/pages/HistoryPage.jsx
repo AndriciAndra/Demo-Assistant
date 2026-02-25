@@ -67,10 +67,10 @@ export default function HistoryPage() {
   const getDownloadUrl = (item) => {
     const path = item.download_url || item.firebase_url;
     if (!path) return null;
-    
+
     // If it's already a full URL (drive, firebase, etc.), return as-is
     if (path.startsWith('http')) return path;
-    
+
     // For relative API paths, return the path (will be handled by handleDownload)
     return path;
   };
@@ -78,19 +78,22 @@ export default function HistoryPage() {
   const handleDownload = async (item) => {
     const path = item.download_url || item.firebase_url;
     if (!path) return;
-    
+
     // If it's a full URL, just open it
     if (path.startsWith('http')) {
       window.open(path, '_blank');
       return;
     }
-    
+
     // For API paths, download via axios
+    // Remove /api prefix if present since api instance already has baseURL with /api
+    const cleanPath = path.startsWith('/api') ? path.replace('/api', '') : path;
+
     try {
-      const response = await api.get(path, {
+      const response = await api.get(cleanPath, {
         responseType: 'blob'
       });
-      
+
       // Create download link
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
@@ -112,22 +115,22 @@ export default function HistoryPage() {
     try {
       // Parse the ISO string as UTC and convert to local time
       const date = new Date(dateString);
-      
+
       // Check if valid date
       if (isNaN(date.getTime())) {
         return dateString;
       }
-      
+
       // Format using local timezone
-      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
-                     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
       const day = date.getDate();
       const month = months[date.getMonth()];
       const year = date.getFullYear();
       const hours = date.getHours().toString().padStart(2, '0');
       const minutes = date.getMinutes().toString().padStart(2, '0');
-      
+
       return `${month} ${day}, ${year} ${hours}:${minutes}`;
     } catch {
       return dateString;
@@ -154,11 +157,10 @@ export default function HistoryPage() {
               <button
                 key={filter.key}
                 onClick={() => setActiveFilter(filter.key)}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  activeFilter === filter.key
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeFilter === filter.key
                     ? 'bg-indigo-50 text-indigo-600'
                     : 'text-gray-500 hover:bg-gray-50'
-                }`}
+                  }`}
               >
                 {filter.label}
               </button>
@@ -187,9 +189,8 @@ export default function HistoryPage() {
               >
                 <div className="flex items-center gap-4">
                   <div
-                    className={`p-2 rounded-lg ${
-                      item.type === 'demo' ? 'bg-purple-100' : 'bg-green-100'
-                    }`}
+                    className={`p-2 rounded-lg ${item.type === 'demo' ? 'bg-purple-100' : 'bg-green-100'
+                      }`}
                   >
                     {item.type === 'demo' ? (
                       <Play size={18} className="text-purple-600" />

@@ -91,17 +91,20 @@ export default function ReviewPage() {
     if (!result?.download_url) return;
 
     const path = result.download_url;
-    
+
     // If it's a full URL, just open it
     if (path.startsWith('http')) {
       window.open(path, '_blank');
       return;
     }
 
+    // Remove /api prefix if present since api instance already has baseURL with /api
+    const cleanPath = path.startsWith('/api') ? path.replace('/api', '') : path;
+
     // For API paths, download via axios
     setIsDownloading(true);
     try {
-      const response = await api.get(path, {
+      const response = await api.get(cleanPath, {
         responseType: 'blob',
         timeout: 30000,
       });
@@ -111,9 +114,9 @@ export default function ReviewPage() {
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      
+
       // Use filename from result or generate one
-      const filename = `self_review_${selectedProject}_${new Date().toISOString().split('T')[0]}.pdf`;
+      const filename = result.filename || `self_review_${selectedProject}_${new Date().toISOString().split('T')[0]}.pdf`;
       link.setAttribute('download', filename);
       document.body.appendChild(link);
       link.click();
