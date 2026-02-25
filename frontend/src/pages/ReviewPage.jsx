@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useOutletContext } from 'react-router-dom';
-import { Target, Check, TrendingUp, Users, Sparkles, FileText } from 'lucide-react';
+import { Target, Check, TrendingUp, Users, Sparkles, FileText, Download } from 'lucide-react';
 import { Card, Button, Dropdown, DateInput, MetricCard, Alert } from '../components/common';
 import { jiraService, reviewService } from '../services';
+import api from '../services/api';
 
 export default function ReviewPage() {
   const { settings } = useOutletContext();
@@ -16,6 +17,7 @@ export default function ReviewPage() {
   const [metrics, setMetrics] = useState(null);
   const [isLoadingTemplate, setIsLoadingTemplate] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
 
@@ -85,6 +87,46 @@ export default function ReviewPage() {
     }
   };
 
+  const handleDownload = async () => {
+    if (!result?.download_url) return;
+
+    const path = result.download_url;
+    
+    // If it's a full URL, just open it
+    if (path.startsWith('http')) {
+      window.open(path, '_blank');
+      return;
+    }
+
+    // For API paths, download via axios
+    setIsDownloading(true);
+    try {
+      const response = await api.get(path, {
+        responseType: 'blob',
+        timeout: 30000,
+      });
+
+      // Create download link
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      
+      // Use filename from result or generate one
+      const filename = `self_review_${selectedProject}_${new Date().toISOString().split('T')[0]}.pdf`;
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Download failed:', err);
+      setError('Failed to download file');
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   if (!settings.jira_connected) {
     return (
       <div className="max-w-4xl mx-auto">
@@ -113,15 +155,26 @@ export default function ReviewPage() {
 
       {result && (
         <Alert type="success" className="mb-6">
-          Self-review generated successfully!{' '}
-          <a
-            href={result.download_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline font-medium"
-          >
-            Download PDF
-          </a>
+          <div className="flex items-center justify-between">
+            <span>Self-review generated successfully!</span>
+            <button
+              onClick={handleDownload}
+              disabled={isDownloading}
+              className="inline-flex items-center gap-2 px-3 py-1 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors disabled:opacity-50"
+            >
+              {isDownloading ? (
+                <>
+                  <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
+                  Downloading...
+                </>
+              ) : (
+                <>
+                  <Download size={16} />
+                  Download PDF
+                </>
+              )}
+            </button>
+          </div>
         </Alert>
       )}
 
@@ -174,14 +227,17 @@ export default function ReviewPage() {
           placeholder={`Enter your template or let AI recommend one based on your work data...
 
 Example:
-Accomplishments
-[DESCRIBE_KEY_ACCOMPLISHMENTS]
+SUMMARY
+[Describe your overall impact and value delivered]
 
-Challenges
-[DESCRIBE_CHALLENGES_OVERCOME]
+KEY ACCOMPLISHMENTS  
+[Describe main achievements and their business impact]
 
-Areas for Growth
-[DESCRIBE_GROWTH_AREAS]`}
+CHALLENGES OVERCOME
+[Describe difficult problems you solved]
+
+GOALS FOR NEXT PERIOD
+[What you plan to focus on next]`}
           className="w-full h-48 px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg resize-none outline-none focus:border-indigo-300 text-gray-700 placeholder:text-gray-400"
         />
       </Card>
