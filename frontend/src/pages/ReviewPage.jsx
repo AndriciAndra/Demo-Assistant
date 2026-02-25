@@ -53,7 +53,7 @@ export default function ReviewPage() {
         },
       });
       setTemplate(data.recommended_template);
-      setMetrics(data.metrics_preview);
+      // setMetrics(data.metrics_preview);
     } catch (err) {
       setError('Failed to get template recommendation');
     } finally {
